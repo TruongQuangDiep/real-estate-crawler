@@ -1,25 +1,27 @@
-# 🏢 Real Estate Inventory Crawler & Email Alert System
+# 🏢 Real Estate Inventory Crawler & Email Report System
 
-Hệ thống backend tự động thu thập (crawler), đồng bộ dữ liệu rổ hàng bất động sản từ các nền tảng **HiSale** (`hisale.com`) và **SalePro** (`salepro.com`), lưu trữ nội bộ vào cơ sở dữ liệu MongoDB và gửi email cảnh báo tự động qua Gmail SMTP khi phát hiện có căn hộ mới xuất hiện.
+Hệ thống backend tự động thu thập, chuẩn hóa, đối chiếu dữ liệu rổ hàng bất động sản từ các nền tảng **HiSale** (`hisale.com`) và **SalePro** (`salepro.com`), lưu trữ nội bộ vào cơ sở dữ liệu MongoDB trên máy chủ VPS và gửi báo cáo định kỳ qua Gmail SMTP kèm file Excel chi tiết khi phát hiện căn mới.
 
 ---
 
-## 🌟 Tính năng nổi bật
+## 🌟 Tính năng chính
 
 - **Đa nền tảng & Đa phân khúc**:
   - **HiSale**: Tự động xác thực tài khoản, thu thập dữ liệu rổ hàng của toàn bộ các dự án mở bán.
-  - **SalePro**: Thu thập đồng bộ danh mục dự án, cào chuyên sâu cả phân khúc **Thấp tầng** (Biệt thự, Shophouse, Liền kề) và **Cao tầng** (Căn hộ chung cư, Penthouse) với quy mô hàng chục nghìn căn hộ trên hàng trăm dự án toàn quốc.
+  - **SalePro**: Thu thập danh mục dự án, cào chuyên sâu cả phân khúc **Thấp tầng** (Biệt thự, Shophouse, Liền kề) và **Cao tầng** (Căn hộ chung cư, Penthouse) với quy mô hàng chục nghìn căn hộ trên hàng trăm dự án toàn quốc.
 - **Lưu trữ nội bộ 100% (Local Database Storage)**:
-  - Dữ liệu lưu trữ trực tiếp trên máy chủ / VPS nội bộ qua MongoDB, không phụ thuộc vào các dịch vụ database đám mây bên thứ ba (Firebase, MongoDB Atlas, Supabase...).
+  - Dữ liệu lưu trữ trực tiếp trên máy chủ / VPS nội bộ qua MongoDB, **không lưu trữ qua database đám mây bên thứ ba** (Firebase, MongoDB Atlas, Supabase...).
   - Thiết lập Compound Unique Index (`source + project_name + unit_code`) đảm bảo không bị trùng lặp dữ liệu và tốc độ truy vấn cực nhanh với `bulkWrite`.
+- **Báo cáo chuyên nghiệp (Email HTML + File Excel đính kèm)**:
+  - **Email HTML Executive Dashboard**: Hiển thị bảng KPI tổng quan (Số căn đã quét, Số căn mới, Trạng thái từng nguồn), và xem trước các căn mới tiêu biểu.
+  - **Đính kèm File Excel (`.xlsx`) tự động**: Toàn bộ danh sách căn mới (không giới hạn số lượng) được xuất trực tiếp thành file Excel đính kèm với 18 cột thông tin chi tiết (STT, Mã căn, Phân khu, Tòa, Tầng, Loại căn, Diện tích, Giá niêm yết, Giá thanh toán sớm, Tiêu chuẩn bàn giao, Link quỹ căn...).
+- **Cơ chế gửi báo cáo linh hoạt (`MAIL_REPORT_MODE`)**:
+  - `DAILY`: Gửi email báo cáo định kỳ hằng ngày (kể cả khi không có căn mới để báo cáo trạng thái hệ thống hoạt động ổn định).
+  - `NEW_ONLY`: Chỉ gửi email khi phát hiện có căn mới trong rổ hàng.
+  - `MAIL_ON_ERROR=true`: Tự động gửi cảnh báo nếu phiên cào gặp sự cố kết nối.
 - **Cơ chế chống spam thông minh (Initial Sync)**:
-  - Trong lần khởi tạo đầu tiên (`--init`), hệ thống đánh dấu đã ghi nhận toàn bộ giỏ hàng hiện hữu để làm mốc đối chiếu, tránh bắn hàng nghìn email rác.
-  - Các phiên chạy tiếp theo chỉ kích hoạt gửi email khi phát hiện có căn mới xuất hiện trong rổ hàng.
-- **Báo cáo Email chuyên nghiệp qua Gmail SMTP**:
-  - Gửi bảng báo cáo HTML trực quan, tối ưu hiển thị trên cả máy tính và điện thoại di động.
-  - Chi tiết từng căn: Tên dự án, Phân khu, Tòa, Tầng, Mã căn, Loại căn, Diện tích thông thủy / Tim tường, Giá niêm yết, Giá thanh toán sớm (TTS), Trạng thái và liên kết mở quỹ căn trực tiếp.
-  - Tiêu đề và nội dung gắn nhãn thời gian thực giúp ngăn chặn Gmail gộp nhóm (thread collapse).
-- **Cơ chế tự phục hồi & Chống gián đoạn mạng (Auto-retry)**:
+  - Khi chạy lần đầu với cờ `--init`, hệ thống ghi nhận toàn bộ giỏ hàng hiện hữu vào cơ sở dữ liệu để làm mốc đối chiếu, tuyệt đối không gửi hàng nghìn email rác.
+- **Cơ chế tự phục hồi mạng (Auto-retry)**:
   - Tích hợp bộ thử lại tự động (Auto-retry 3 lần với Exponential Backoff) khi gặp sự cố chập chờn đường truyền Internet hoặc TCP socket reset (`ECONNRESET`, `ETIMEDOUT`).
 
 ---
@@ -29,16 +31,16 @@ Hệ thống backend tự động thu thập (crawler), đồng bộ dữ liệu
 ```text
 crawler/
 ├── .env                  # File cấu hình biến môi trường cục bộ (KHÔNG commit lên Git)
-├── .env.example          # File mẫu cấu hình môi trường
-├── .gitignore            # Danh sách loại trừ Git (node_modules, .env, logs...)
+├── .env.example          # File mẫu cấu hình môi trường chuẩn
+├── .gitignore            # Danh sách loại trừ Git (node_modules, .env, session caches...)
 ├── package.json          # Quản lý dependencies và scripts điều khiển
 ├── package-lock.json     # Khóa phiên bản thư viện
 ├── README.md             # Tài liệu hướng dẫn sử dụng chi tiết
 └── src/
     ├── index.js          # Điểm khởi chạy chính (CLI runner & Cron job scheduler)
-    ├── db.js             # Quản lý kết nối MongoDB nội bộ
-    ├── mailer.js         # Xây dựng template HTML và gửi email SMTP qua Nodemailer
-    ├── testMail.js       # Script kiểm thử gửi email độc lập
+    ├── db.js             # Quản lý kết nối MongoDB nội bộ (bảo mật URL)
+    ├── mailer.js         # Điều phối gửi email SMTP qua Nodemailer
+    ├── testMail.js       # Script kiểm thử gửi email & file Excel đính kèm
     ├── crawlers/
     │   ├── hisaleCrawler.js          # Logic cào dữ liệu sàn HiSale
     │   ├── saleproCrawler.js         # Logic cào phân khúc thấp tầng SalePro
@@ -46,17 +48,19 @@ crawler/
     ├── models/
     │   ├── Project.js    # Schema lưu trữ danh mục dự án
     │   ├── Unit.js       # Schema lưu trữ thông tin chi tiết từng căn hộ
-    │   └── CrawlLog.js   # Schema lưu vết lịch sử các phiên cào
+    │   └── CrawlLog.js   # Schema lưu vết lịch sử các phiên cào (SUCCESS/PARTIAL/FAILED)
     └── services/
-        ├── hisaleAuth.js # Quản lý phiên đăng nhập và Cookie của HiSale
-        └── saleproAuth.js# Quản lý phiên đăng nhập và Token của SalePro
+        ├── hisaleAuth.js   # Quản lý phiên đăng nhập và Cookie của HiSale
+        ├── saleproAuth.js  # Quản lý phiên đăng nhập và Token của SalePro
+        ├── excelService.js # Xuất file Excel báo cáo căn mới trong bộ nhớ
+        └── reportService.js# Tạo giao diện HTML email báo cáo Executive Dashboard
 ```
 
 ---
 
 ## ⚙️ Yêu cầu hệ thống
 
-- **Node.js**: Phiên bản `>= 18.0.0` (Khuyến nghị Node 20 LTS hoặc mới hơn).
+- **Node.js**: Phiên bản `>= 18.0.0` (Khuyến nghị Node 20 LTS trở lên).
 - **MongoDB**: MongoDB Community Server `>= 6.0` chạy nội bộ (Localhost trên cổng `27017`) hoặc Docker MongoDB container.
 
 ---
@@ -116,12 +120,21 @@ MAIL_TO=recipient1@gmail.com,recipient2@gmail.com
 # CẤU HÌNH LỊCH CHẠY TỰ ĐỘNG (CRON JOB)
 # ==========================================
 CRON_SCHEDULE=0 7 * * *
+CRON_TIMEZONE=Asia/Ho_Chi_Minh
+
+# ==========================================
+# CẤU HÌNH BÁO CÁO EMAIL & EXCEL
+# ==========================================
+# 'DAILY' (gửi báo cáo mỗi ngày) hoặc 'NEW_ONLY' (chỉ gửi khi có căn mới)
+MAIL_REPORT_MODE=DAILY
+MAIL_ON_ERROR=true
+MAIL_MAX_PREVIEW_UNITS=15
 ```
 
-> **📌 Lưu ý khi cấu hình Gmail SMTP:**
+> **📌 Hướng dẫn lấy Mật khẩu ứng dụng Gmail (App Password):**
 > 1. Truy cập [Google Account Security](https://myaccount.google.com/security) và bật **Xác minh 2 bước (2-Step Verification)**.
 > 2. Tìm mục **Mật khẩu ứng dụng (App Passwords)**, tạo một mật khẩu mới (chuỗi 16 ký tự).
-> 3. Điền chuỗi 16 ký tự này vào biến `SMTP_PASS` (không dùng mật khẩu đăng nhập Gmail thông thường).
+> 3. Điền chuỗi 16 ký tự này vào biến `SMTP_PASS` (không dùng mật khẩu đăng nhập thông thường).
 
 ---
 
@@ -129,12 +142,12 @@ CRON_SCHEDULE=0 7 * * *
 
 | Lệnh | Chức năng | Mô tả |
 | :--- | :--- | :--- |
-| `npm run test:mail` | **Test gửi email** | Gửi ngay 1 email mẫu tới danh sách `MAIL_TO` để kiểm tra kết nối SMTP và giao diện hiển thị. |
+| `npm run test:mail` | **Test gửi email** | Gửi ngay 1 email mẫu kèm file Excel đính kèm tới danh sách `MAIL_TO` để kiểm tra kết nối SMTP và giao diện hiển thị. |
 | `npm run crawl:salepro` | **Khởi tạo dữ liệu SalePro** | Nạp toàn bộ dự án thấp tầng và cao tầng của SalePro vào local MongoDB mà không gửi mail. |
 | `npm run crawl:hisale` | **Khởi tạo dữ liệu HiSale** | Nạp toàn bộ dữ liệu dự án của sàn HiSale vào local MongoDB mà không gửi mail. |
 | `npm run crawl:init` | **Khởi tạo toàn bộ** | Quét và đồng bộ mốc dữ liệu gốc cho cả 2 sàn cùng lúc. |
-| `npm run crawl:now` | **Quét kiểm tra ngay** | Chạy ngay 1 phiên cào đầy đủ. Nếu phát hiện căn mới so với database nội bộ, tự động gửi email thông báo. |
-| `npm start` | **Chạy tự động (Cron Job)** | Giữ tiến trình chạy ngầm, tự động thức dậy cào theo lịch trình đã cấu hình trong `CRON_SCHEDULE` (mặc định 07:00 sáng mỗi ngày). |
+| `npm run crawl:now` | **Quét kiểm tra ngay** | Chạy ngay 1 phiên cào đầy đủ. Tạo báo cáo email và đính kèm file Excel nếu có căn mới xuất hiện. |
+| `npm start` | **Chạy tự động (Cron Job)** | Giữ tiến trình chạy ngầm, tự động thức dậy cào theo lịch trình đã cấu hình trong `CRON_SCHEDULE` (mặc định 07:00 sáng mỗi ngày giờ Việt Nam). |
 
 ---
 
@@ -148,7 +161,7 @@ Hệ thống được thiết kế hoàn toàn tương thích để chuyển gia
 ssh user@<IP_VPS>
 
 # 2. Clone mã nguồn từ GitHub Private Repo
-git clone https://github.com/<your-username>/<your-repo-name>.git /opt/crawler
+git clone https://github.com/TruongQuangDiep/real-estate-crawler.git /opt/crawler
 cd /opt/crawler
 
 # 3. Cài đặt dependencies
@@ -158,12 +171,12 @@ npm install
 ### Bước 2: Khởi tạo cơ sở dữ liệu nội bộ trên VPS
 Cài đặt MongoDB trực tiếp trên VPS hoặc chạy container:
 ```bash
-# Tùy chọn chạy nhanh bằng Docker nội bộ trên VPS:
+# Chạy container MongoDB nội bộ trên VPS:
 docker run -d --name mongo_local -p 27017:27017 -v mongo_data:/data/db --restart unless-stopped mongo:7
 ```
 
 ### Bước 3: Thiết lập cấu hình `.env`
-Tạo file `.env` trên VPS và điền thông số tương tự như máy cá nhân:
+Tạo file `.env` trên VPS và cấu hình tương tự như máy cá nhân:
 ```bash
 nano .env
 ```
@@ -188,7 +201,7 @@ pm2 logs real-estate-bot
 
 ---
 
-## 🛡️ Bảo mật & Giám sát dữ liệu
+## 🛡️ Bảo mật & Giám sát vận hành
 
-- **Không đưa thông tin nhạy cảm lên Git**: File `.env` chứa mật khẩu Gmail, cookie, token xác thực đã được đưa vào `.gitignore` để đảm bảo an toàn tuyệt đối.
-- **Giám sát hoạt động**: Toàn bộ lịch sử mỗi lần cào, số lượng căn quét được, số lượng căn mới và thông báo gửi mail đều được ghi nhận vào collection `crawllogs` trong cơ sở dữ liệu.
+- **Bảo vệ thông tin định danh**: File `.env` và các file lưu cache session (`.hisale_session.json`, `.salepro_session.json`) đều được loại trừ trong `.gitignore`. Chuỗi kết nối MongoDB được ẩn mật khẩu trên console log.
+- **Giám sát hoạt động**: Toàn bộ lịch sử mỗi lần cào, số lượng dự án thành công/lỗi, số lượng căn quét được, số lượng căn mới và thông báo gửi mail đều được ghi nhận vào collection `crawllogs` trong cơ sở dữ liệu.

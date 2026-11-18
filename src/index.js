@@ -1,5 +1,6 @@
 require('dotenv').config();
 const cron = require('node-cron');
+const mongoose = require('mongoose');
 const { connectDB } = require('./db');
 const { crawlAllHisaleProjects } = require('./crawlers/hisaleCrawler');
 const { crawlAllSaleProProjects } = require('./crawlers/saleproCrawler');
@@ -7,105 +8,136 @@ const { crawlAllSaleProHighRiseProjects } = require('./crawlers/saleproHighRiseC
 const { sendNotificationEmail } = require('./mailer');
 const CrawlLog = require('./models/CrawlLog');
 
+let isRunning = false;
+
 /**
- * Hàm điều phối toàn bộ chu trình cào dữ liệu cho 1 nguồn cụ thể
+ * Điều phối thực thi và ghi vết lịch sử (CrawlLog) cho một nguồn cào cụ thể
  */
-async function runCrawlerForSource(sourceName, crawlFn, projectId, isInitialSync) {
+async function runCrawlerForSource(sourceName, crawlFn, isInitialSync = false) {
   const startedAt = new Date();
   const log = new CrawlLog({
     started_at: startedAt,
     source: sourceName,
-    project_id: projectId,
-    status: 'RUNNING'
+    status: 'RUNNING',
   });
   await log.save();
 
   try {
-    const stats = await crawlFn(projectId, isInitialSync);
+    const stats = (await crawlFn(isInitialSync)) || {};
 
-    log.total_scanned = stats.totalScanned;
-    log.new_units_count = stats.newUnitsCount;
-    log.updated_units_count = stats.updatedUnitsCount;
-    log.status = 'SUCCESS';
+    const successProjects = Number(stats.successProjects) || 0;
+    const failedProjects = Number(stats.errorProjects || stats.failedProjects) || 0;
+    const skippedProjects = Number(stats.skippedProjects) || 0;
+    const totalProjects = successProjects + failedProjects + skippedProjects;
+
+    // Phân định rõ trạng thái: SUCCESS, PARTIAL (thành công 1 phần), hoặc FAILED
+    let status = 'SUCCESS';
+    if (failedProjects > 0 || skippedProjects > 0) {
+      status = successProjects > 0 ? 'PARTIAL' : 'FAILED';
+    }
+
+    log.total_scanned = Number(stats.totalScanned) || 0;
+    log.new_units_count = Number(stats.newUnitsCount) || 0;
+    log.updated_units_count = Number(stats.updatedUnitsCount) || 0;
+    log.success_projects = successProjects;
+    log.failed_projects = failedProjects;
+    log.skipped_projects = skippedProjects;
+    log.total_projects = totalProjects;
+    log.status = status;
     log.finished_at = new Date();
     await log.save();
 
-    return stats;
+    return {
+      ...stats,
+      source: sourceName,
+      status,
+      logId: log._id,
+      totalScanned: log.total_scanned,
+      newUnitsCount: log.new_units_count,
+      updatedUnitsCount: log.updated_units_count,
+    };
   } catch (error) {
-    console.error(`[Job ${sourceName}] ❌ Lỗi:`, error.message);
+    console.error(`[Job ${sourceName}] ❌ Lỗi không thể khắc phục:`, error.message);
     log.status = 'FAILED';
     log.error_message = error.message;
     log.finished_at = new Date();
     await log.save();
-    return { totalScanned: 0, newUnitsCount: 0, updatedUnitsCount: 0, error: error.message };
+
+    return {
+      source: sourceName,
+      status: 'FAILED',
+      totalScanned: 0,
+      newUnitsCount: 0,
+      updatedUnitsCount: 0,
+      logId: log._id,
+      error: error.message,
+    };
   }
 }
 
 /**
- * Hàm điều phối toàn bộ chu trình: Cào dữ liệu cả 2 web -> Lưu DB -> Gửi Mail
- * @param {boolean} isInitialSync - Chế độ lần đầu (không gửi mail)
- * @param {string|null} targetSource - Chỉ định nguồn cào ('hisale' hoặc 'salepro', null = cào cả 2)
+ * Hàm điều phối toàn bộ chu trình: Cào dữ liệu -> Lưu DB -> Báo cáo Email & Excel
+ * @param {boolean} isInitialSync - Chế độ khởi tạo ban đầu (không gửi email)
+ * @param {string|null} targetSource - Nguồn chỉ định ('hisale', 'salepro' hoặc null = cả 2)
  */
 async function runJob(isInitialSync = false, targetSource = null) {
+  if (isRunning) {
+    console.warn('[Runner] ⚠️ Đang có một phiên quét khác đang chạy. Bỏ qua yêu cầu mới để tránh xung đột dữ liệu.');
+    return false;
+  }
+
+  isRunning = true;
+  const startedAt = new Date();
+
   console.log(`\n====================================================================`);
-  console.log(`🚀 [RUNNER] BẮT ĐẦU PHIÊN CÀO RỔ HÀNG TỰ ĐỘNG - ${new Date().toLocaleString('vi-VN')}`);
+  console.log(`🚀 [RUNNER] BẮT ĐẦU PHIÊN CÀO RỔ HÀNG TỰ ĐỘNG - ${startedAt.toLocaleString('vi-VN')}`);
   console.log(`====================================================================`);
 
-  let totalNewAll = 0;
+  try {
+    const stats = [];
 
-  // 1. CÀO HISALE (tự động quét & cào toàn bộ dự án đang mở bán khi HISALE_PROJECT_IDS=ALL hoặc theo danh sách ID)
-  if (!targetSource || targetSource === 'hisale') {
-    const hisaleScope = (process.env.HISALE_PROJECT_IDS || process.env.HISALE_PROJECT_ID || 'ALL').trim();
-    const hisaleStats = await runCrawlerForSource(
-      'hisale',
-      (_, initSync) => crawlAllHisaleProjects(initSync),
-      hisaleScope,
-      isInitialSync
-    );
-    totalNewAll += hisaleStats.newUnitsCount;
-  }
+    // 1. CÀO HISALE
+    if (!targetSource || targetSource === 'hisale') {
+      const hisaleResult = await runCrawlerForSource('HiSale', crawlAllHisaleProjects, isInitialSync);
+      stats.push(hisaleResult);
+    }
 
-  // 2. CÀO SALEPRO (cào toàn bộ dự án đang mở bán khi SALEPRO_PROJECT_IDS=ALL hoặc theo danh sách ID)
-  if (!targetSource || targetSource === 'salepro') {
-    const saleproScope = (process.env.SALEPRO_PROJECT_IDS || process.env.SALEPRO_PROJECT_ID || 'ALL').trim();
-    const saleproStats = await runCrawlerForSource(
-      'salepro',
-      async (_, initSync) => {
-        const lowRes = (await crawlAllSaleProProjects(initSync)) || {};
-        let highRes = { totalScanned: 0, newUnitsCount: 0, updatedUnitsCount: 0 };
-        try {
-          highRes = (await crawlAllSaleProHighRiseProjects(initSync)) || highRes;
-        } catch (hrErr) {
-          console.error('[SalePro Cao tầng] ❌ Lỗi không mong muốn:', hrErr.message);
+    // 2. CÀO SALEPRO THẤP TẦNG
+    if (!targetSource || targetSource === 'salepro') {
+      const saleproLowResult = await runCrawlerForSource('SalePro Thấp tầng', crawlAllSaleProProjects, isInitialSync);
+      stats.push(saleproLowResult);
+
+      // 3. CÀO SALEPRO CAO TẦNG
+      const saleproHighResult = await runCrawlerForSource('SalePro Cao tầng', crawlAllSaleProHighRiseProjects, isInitialSync);
+      stats.push(saleproHighResult);
+    }
+
+    // 4. BÁO CÁO QUA EMAIL & EXCEL
+    if (!isInitialSync) {
+      console.log(`\n[Mailer] 📊 Đang tổng hợp kết quả phiên cào để tạo báo cáo Email & Excel...`);
+      const mailResult = await sendNotificationEmail(stats);
+
+      if (mailResult && mailResult.sent) {
+        const logIds = stats.map((s) => s.logId).filter(Boolean);
+        if (logIds.length > 0) {
+          await CrawlLog.updateMany({ _id: { $in: logIds } }, { $set: { mail_sent: true } });
         }
+      }
+    } else {
+      console.log(`\n[Job] ✅ Chế độ --init: Đã nạp dữ liệu nền thành công và đánh dấu đã thông báo (không spam mail).`);
+    }
 
-        return {
-          ...lowRes,
-          totalScanned: (Number(lowRes.totalScanned) || 0) + (Number(highRes.totalScanned) || 0),
-          newUnitsCount: (Number(lowRes.newUnitsCount) || 0) + (Number(highRes.newUnitsCount) || 0),
-          updatedUnitsCount:
-            (Number(lowRes.updatedUnitsCount) || 0) + (Number(highRes.updatedUnitsCount) || 0),
-        };
-      },
-      saleproScope,
-      isInitialSync
-    );
-    totalNewAll += saleproStats.newUnitsCount;
+    console.log(`\n====================================================================`);
+    console.log(`🏁 [RUNNER] HOÀN TẤT TOÀN BỘ PHIÊN CÀO LÚC ${new Date().toLocaleTimeString('vi-VN')}!`);
+    console.log(`====================================================================\n`);
+
+    return stats.every((s) => s.status === 'SUCCESS');
+  } catch (err) {
+    console.error('[Runner] ❌ Phiên xử lý gặp lỗi nghiêm trọng:', err.message);
+    return false;
+  } finally {
+    isRunning = false;
   }
-
-  // 3. GỬI EMAIL NẾU CÓ CĂN MỚI
-  if (!isInitialSync && totalNewAll > 0) {
-    console.log(`\n[Job] 🔔 Phát hiện tổng cộng ${totalNewAll} căn mới từ các nguồn! Đang gửi mail cho sếp...`);
-    await sendNotificationEmail();
-  } else if (isInitialSync) {
-    console.log(`\n[Job] ✅ Chế độ --init: Đã nạp dữ liệu thành công và đánh dấu đã thông báo (không spam mail).`);
-  } else {
-    console.log(`\n[Job] ℹ️ Không có căn mới phát sinh trong phiên quét này.`);
-  }
-
-  console.log(`\n====================================================================`);
-  console.log(`🏁 [RUNNER] HOÀN TẤT TOÀN BỘ PHIÊN CÀO LÚC ${new Date().toLocaleTimeString('vi-VN')}!`);
-  console.log(`====================================================================\n`);
 }
 
 async function main() {
@@ -115,36 +147,55 @@ async function main() {
   const isInit = args.includes('--init');
   const isNow = args.includes('--now');
 
-  // Kiểm tra cờ lọc nguồn nếu có (ví dụ: --source=salepro hoặc --source=hisale)
+  // Lọc nguồn: --source=salepro hoặc --source=hisale
   let targetSource = null;
   const sourceArg = args.find((a) => a.startsWith('--source='));
   if (sourceArg) {
     targetSource = sourceArg.split('=')[1].toLowerCase();
+    if (!['hisale', 'salepro'].includes(targetSource)) {
+      throw new Error(`Nguồn dữ liệu không hợp lệ: [${targetSource}]. Chỉ chấp nhận 'hisale' hoặc 'salepro'.`);
+    }
   }
 
   if (isInit) {
-    console.log(`[Runner] Chế độ --init: Khởi tạo dữ liệu ${targetSource ? `cho [${targetSource}]` : 'cho CẢ 2 NGUỒN (HiSale & SalePro)'}...`);
-    await runJob(true, targetSource);
-    process.exit(0);
+    console.log(`[Runner] Chế độ --init: Khởi tạo dữ liệu ${targetSource ? `cho [${targetSource}]` : 'cho CẢ 2 NGUỒN'}...`);
+    const success = await runJob(true, targetSource);
+    await mongoose.disconnect();
+    process.exit(success ? 0 : 1);
   } else if (isNow) {
-    console.log(`[Runner] Chế độ --now: Cào ngay lập tức ${targetSource ? `cho [${targetSource}]` : 'cho CẢ 2 NGUỒN'} và gửi mail nếu có căn mới...`);
-    await runJob(false, targetSource);
-    process.exit(0);
+    console.log(`[Runner] Chế độ --now: Quét ngay lập tức ${targetSource ? `cho [${targetSource}]` : 'cho CẢ 2 NGUỒN'} và tạo báo cáo...`);
+    const success = await runJob(false, targetSource);
+    await mongoose.disconnect();
+    process.exit(success ? 0 : 1);
   } else {
-    // Chế độ lập lịch hằng ngày
+    // Chế độ lịch tự động (Cron Job)
     const schedule = process.env.CRON_SCHEDULE || '0 7 * * *';
-    console.log(`[Scheduler] ⏰ Bot đã khởi động và lên lịch tự động: [${schedule}]`);
-    console.log(`[Scheduler] Bot sẽ tự động thức dậy mỗi ngày để quét CẢ 2 WEBSITE (HiSale + SalePro) và gửi mail.`);
-    console.log(`(Mẹo: Muốn chạy test ngay lập tức cả 2 web, gõ: npm run crawl:now)\n`);
+    const timezone = process.env.CRON_TIMEZONE || 'Asia/Ho_Chi_Minh';
 
-    cron.schedule(schedule, async () => {
-      console.log(`\n[Cron] 🔔 Đến giờ hẹn [${schedule}], bắt đầu kích hoạt job cào cả 2 nguồn...`);
-      await runJob(false, null);
-    });
+    if (!cron.validate(schedule)) {
+      throw new Error(`CRON_SCHEDULE không hợp lệ: ${schedule}`);
+    }
+
+    console.log(`[Scheduler] ⏰ Bot đã khởi động và lên lịch tự động: [${schedule}]`);
+    console.log(`[Scheduler] Múi giờ hoạt động: ${timezone}`);
+    console.log(`[Scheduler] Chế độ báo cáo email: ${process.env.MAIL_REPORT_MODE || 'DAILY'}`);
+    console.log(`(Mẹo: Muốn chạy thử ngay lập tức cả 2 web, gõ: npm run crawl:now)\n`);
+
+    cron.schedule(
+      schedule,
+      async () => {
+        console.log(`\n[Cron] 🔔 Đến giờ hẹn [${schedule}], bắt đầu kích hoạt phiên cào tự động...`);
+        await runJob(false, null);
+      },
+      { timezone }
+    );
   }
 }
 
-main().catch((err) => {
-  console.error('Fatal Error:', err);
+main().catch(async (err) => {
+  console.error('[Fatal Error]', err.message);
+  try {
+    await mongoose.disconnect();
+  } catch (_) {}
   process.exit(1);
 });

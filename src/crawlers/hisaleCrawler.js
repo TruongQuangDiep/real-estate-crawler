@@ -757,7 +757,10 @@ async function crawlAllHisaleProjects(isInitialSync = false, scopeOverride = nul
   return {
     totalScanned,
     newUnitsCount: totalNewUnits,
-    updatedUnitsCount: totalUpdatedUnits
+    updatedUnitsCount: totalUpdatedUnits,
+    successProjects: successCount,
+    errorProjects: errorCount,
+    skippedProjects: Math.max(0, targetProjects.length - successCount - errorCount),
   };
 }
 

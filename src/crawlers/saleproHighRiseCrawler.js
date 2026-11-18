@@ -302,9 +302,9 @@ async function fetchProjectHighRiseUnits(project, options = {}) {
       const dedupeKey = `${code}::${sub}`;
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
+        collected.push(row);
         addedThisPage += 1;
       }
-      collected.push(row);
     }
 
     // Stop early if backend repeats the exact same page or returns fewer rows than pageLimit
@@ -438,6 +438,7 @@ async function crawlAllSaleProHighRiseProjects(isInitialSync = false, options = 
     updatedUnitsCount: updatedCount,
     successProjects,
     errorProjects,
+    skippedProjects: Math.max(0, targetProjects.length - successProjects - errorProjects),
   };
 }
 
