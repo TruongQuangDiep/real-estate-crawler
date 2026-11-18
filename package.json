@@ -9,6 +9,7 @@
     "crawl:init": "node src/index.js --init",
     "crawl:salepro": "node src/index.js --init --source=salepro",
     "test:mail": "node src/testMail.js",
+    "report:now": "node src/index.js --digest",
     "crawl:hisale": "node src/index.js --init --source=hisale"
   },
   "dependencies": {

@@ -119,7 +119,14 @@ MAIL_TO=recipient1@gmail.com,recipient2@gmail.com
 # ==========================================
 # CẤU HÌNH LỊCH CHẠY TỰ ĐỘNG (CRON JOB)
 # ==========================================
-CRON_SCHEDULE=0 7 * * *
+# 1. Lịch cào dữ liệu (5 lần/ngày: 06:00, 10:00, 14:00, 18:00, 22:00)
+# Cào và tích lũy căn mới vào database, không gửi email trong các phiên này:
+CRON_SCHEDULE=0 6,10,14,18,22 * * *
+
+# 2. Lịch gửi email báo cáo tổng hợp (Đúng 07:00 sáng mỗi ngày gửi 1 email duy nhất kèm file Excel):
+MAIL_CRON_SCHEDULE=0 7 * * *
+
+# Múi giờ hoạt động
 CRON_TIMEZONE=Asia/Ho_Chi_Minh
 
 # ==========================================
@@ -145,9 +152,10 @@ MAIL_MAX_PREVIEW_UNITS=15
 | `npm run test:mail` | **Test gửi email** | Gửi ngay 1 email mẫu kèm file Excel đính kèm tới danh sách `MAIL_TO` để kiểm tra kết nối SMTP và giao diện hiển thị. |
 | `npm run crawl:salepro` | **Khởi tạo dữ liệu SalePro** | Nạp toàn bộ dự án thấp tầng và cao tầng của SalePro vào local MongoDB mà không gửi mail. |
 | `npm run crawl:hisale` | **Khởi tạo dữ liệu HiSale** | Nạp toàn bộ dữ liệu dự án của sàn HiSale vào local MongoDB mà không gửi mail. |
-| `npm run crawl:init` | **Khởi tạo toàn bộ** | Quét và đồng bộ mốc dữ liệu gốc cho cả 2 sàn cùng lúc. |
-| `npm run crawl:now` | **Quét kiểm tra ngay** | Chạy ngay 1 phiên cào đầy đủ. Tạo báo cáo email và đính kèm file Excel nếu có căn mới xuất hiện. |
-| `npm start` | **Chạy tự động (Cron Job)** | Giữ tiến trình chạy ngầm, tự động thức dậy cào theo lịch trình đã cấu hình trong `CRON_SCHEDULE` (mặc định 07:00 sáng mỗi ngày giờ Việt Nam). |
+| `npm run crawl:init` | **Khởi tạo toàn bộ** | Quét và đồng bộ mốc dữ liệu gốc cho cả 2 sàn cùng lúc (không gửi mail). |
+| `npm run crawl:now` | **Quét kiểm tra ngay** | Chạy ngay 1 phiên cào đầy đủ. Tạo báo cáo email và đính kèm file Excel ngay lập tức. |
+| `npm run report:now` | **Gửi báo cáo ngay** | Kích hoạt gửi ngay email báo cáo tổng hợp kèm file Excel của các căn mới tích lũy. |
+| `npm start` | **Chạy tự động (Cron Job)** | Giữ tiến trình chạy ngầm: Tự động cào 5 lần/ngày (`CRON_SCHEDULE`) và gửi đúng 1 email tổng hợp vào 07:00 sáng mỗi ngày (`MAIL_CRON_SCHEDULE`). |
 
 ---
 
