@@ -518,7 +518,10 @@ async function crawlAllSaleProProjects(isInitialSync = false) {
   return {
     totalScanned,
     newUnitsCount,
-    updatedUnitsCount
+    updatedUnitsCount,
+    successProjects,
+    errorProjects: failedProjects,
+    skippedProjects: 0
   };
 }
 

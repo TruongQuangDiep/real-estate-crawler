@@ -328,14 +328,7 @@ async function fetchProjectHighRiseUnits(project, options = {}) {
  */
 async function crawlAllSaleProHighRiseProjects(isInitialSync = false, options = {}) {
   if (!process.env.SALEPRO_AUTH_TOKEN) {
-    console.warn('[SalePro Cao tầng] ⚠️ Thiếu SALEPRO_AUTH_TOKEN trong .env, bỏ qua cào cao tầng.');
-    return {
-      totalScanned: 0,
-      newUnitsCount: 0,
-      updatedUnitsCount: 0,
-      successProjects: 0,
-      errorProjects: 0,
-    };
+    throw new Error('Thiếu cấu hình xác thực SALEPRO_AUTH_TOKEN cho phân khúc SalePro Cao tầng trong .env.');
   }
 
   const scopeSet = parseSaleProProjectScope();

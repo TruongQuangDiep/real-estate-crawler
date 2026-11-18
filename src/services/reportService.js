@@ -23,10 +23,33 @@ function formatPriceVnd(price) {
 
 function buildDailyReport({ stats = [], units = [], generatedAt = new Date() }) {
   const maxPreview = Math.max(1, Number(process.env.MAIL_MAX_PREVIEW_UNITS) || 15);
-  const hasError = stats.some((s) => s.status === 'FAILED' || s.status === 'PARTIAL');
   const totalScanned = stats.reduce((sum, s) => sum + (s.totalScanned || 0), 0);
   const totalNewInRun = stats.reduce((sum, s) => sum + (s.newUnitsCount || 0), 0);
   const pendingUnitsCount = units.length;
+
+  // Phân loại chính xác 3 cấp độ trạng thái hệ thống:
+  const allFailed = stats.length > 0 && stats.every((s) => s.status === 'FAILED');
+  const hasPartialOrError = stats.some((s) => s.status === 'FAILED' || s.status === 'PARTIAL');
+
+  let systemStatusText = '✅ HOÀN TẤT';
+  let systemStatusColor = '#15803d';
+  let systemStatusBg = '#f0fdf4';
+  let systemStatusBorder = '#bbf7d0';
+  let systemStatusSub = 'đồng bộ trọn vẹn';
+
+  if (allFailed) {
+    systemStatusText = '❌ ĐỒNG BỘ THẤT BẠI';
+    systemStatusColor = '#b91c1c';
+    systemStatusBg = '#fef2f2';
+    systemStatusBorder = '#fecaca';
+    systemStatusSub = 'cần kiểm tra kết nối';
+  } else if (hasPartialOrError) {
+    systemStatusText = '⚠️ DỮ LIỆU CHƯA ĐẦY ĐỦ';
+    systemStatusColor = '#b45309';
+    systemStatusBg = '#fffbeb';
+    systemStatusBorder = '#fde68a';
+    systemStatusSub = 'có một số dự án lỗi';
+  }
 
   const dateStr = generatedAt.toLocaleDateString('vi-VN', {
     timeZone: process.env.CRON_TIMEZONE || 'Asia/Ho_Chi_Minh',
@@ -209,16 +232,16 @@ function buildDailyReport({ stats = [], units = [], generatedAt = new Date() }) 
             <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">căn trên sàn</div>
           </td>
           <td style="background-color: ${pendingUnitsCount > 0 ? '#fef2f2' : '#f8fafc'}; border: 1px solid ${pendingUnitsCount > 0 ? '#fecaca' : '#e2e8f0'}; border-radius: 8px; padding: 14px; text-align: center; width: 33%;">
-            <div style="font-size: 11px; font-weight: 600; color: ${pendingUnitsCount > 0 ? '#b91c1c' : '#64748b'}; text-transform: uppercase;">Căn Mới Phát Hiện</div>
+            <div style="font-size: 11px; font-weight: 600; color: ${pendingUnitsCount > 0 ? '#b91c1c' : '#64748b'}; text-transform: uppercase;">Căn Cần Thông Báo</div>
             <div style="font-size: 22px; font-weight: 800; color: ${pendingUnitsCount > 0 ? '#dc2626' : '#1e293b'}; margin-top: 4px;">${pendingUnitsCount.toLocaleString('vi-VN')}</div>
-            <div style="font-size: 11px; color: ${pendingUnitsCount > 0 ? '#ef4444' : '#94a3b8'}; margin-top: 2px;">cần thông báo</div>
+            <div style="font-size: 11px; color: ${pendingUnitsCount > 0 ? '#ef4444' : '#94a3b8'}; margin-top: 2px;">căn mới & tồn đọng</div>
           </td>
-          <td style="background-color: ${hasError ? '#fffbeb' : '#f0fdf4'}; border: 1px solid ${hasError ? '#fde68a' : '#bbf7d0'}; border-radius: 8px; padding: 14px; text-align: center; width: 33%;">
-            <div style="font-size: 11px; font-weight: 600; color: ${hasError ? '#b45309' : '#166534'}; text-transform: uppercase;">Trạng Thái Hệ Thống</div>
-            <div style="font-size: 16px; font-weight: 800; color: ${hasError ? '#d97706' : '#15803d'}; margin-top: 6px;">
-              ${hasError ? '⚠️ CÓ LỖI NHẸ' : '✅ HOÀN TẤT'}
+          <td style="background-color: ${systemStatusBg}; border: 1px solid ${systemStatusBorder}; border-radius: 8px; padding: 14px; text-align: center; width: 33%;">
+            <div style="font-size: 11px; font-weight: 600; color: ${systemStatusColor}; text-transform: uppercase;">Trạng Thái Hệ Thống</div>
+            <div style="font-size: 15px; font-weight: 800; color: ${systemStatusColor}; margin-top: 6px;">
+              ${systemStatusText}
             </div>
-            <div style="font-size: 11px; color: ${hasError ? '#d97706' : '#16a34a'}; margin-top: 2px;">kết nối tự động</div>
+            <div style="font-size: 11px; color: ${systemStatusColor}; margin-top: 2px;">${systemStatusSub}</div>
           </td>
         </tr>
       </table>

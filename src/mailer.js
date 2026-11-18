@@ -97,11 +97,16 @@ async function sendNotificationEmail(stats = []) {
     timeZone: process.env.CRON_TIMEZONE || 'Asia/Ho_Chi_Minh',
   });
 
-  const statusText = hasError
-    ? '⚠️ CÓ LỖI KẾT NỐI'
-    : units.length > 0
-      ? `+${units.length} CĂN MỚI`
-      : 'ĐỒNG BỘ ỔN ĐỊNH';
+  const allFailed = stats.length > 0 && stats.every((s) => s.status === 'FAILED');
+  const hasPartialOrError = stats.some((s) => s.status === 'FAILED' || s.status === 'PARTIAL');
+
+  const statusText = allFailed
+    ? '❌ ĐỒNG BỘ THẤT BẠI'
+    : hasPartialOrError
+      ? '⚠️ DỮ LIỆU CHƯA ĐẦY ĐỦ'
+      : units.length > 0
+        ? `+${units.length} CĂN MỚI`
+        : 'ĐỒNG BỘ ỔN ĐỊNH';
 
   const subject = `[RỔ HÀNG BĐS] ${dateStr} - ${statusText} (${formatEmailTimestamp(now)})`;
   const html = buildDailyReport({ stats, units, generatedAt: now });
@@ -127,8 +132,10 @@ async function sendNotificationEmail(stats = []) {
       attachments,
     });
 
-    if (info.rejected && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
-      throw new Error(`SMTP từ chối toàn bộ người nhận: ${info.rejected.join(', ')}`);
+    if (!info.accepted?.length || info.rejected?.length) {
+      throw new Error(
+        `SMTP chưa gửi được đầy đủ cho tất cả người nhận. Bị từ chối: ${info.rejected?.join(', ') || 'Không rõ'}`
+      );
     }
 
     console.log(`[Mailer] ✅ Gửi email thành công tới ${smtpConfig.to}! (MessageId: ${info.messageId})`);

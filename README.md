@@ -164,15 +164,15 @@ ssh user@<IP_VPS>
 git clone https://github.com/TruongQuangDiep/real-estate-crawler.git /opt/crawler
 cd /opt/crawler
 
-# 3. Cài đặt dependencies
-npm install
+# 3. Cài đặt chính xác các gói dependencies
+npm ci
 ```
 
-### Bước 2: Khởi tạo cơ sở dữ liệu nội bộ trên VPS
-Cài đặt MongoDB trực tiếp trên VPS hoặc chạy container:
+### Bước 2: Khởi tạo cơ sở dữ liệu nội bộ an toàn trên VPS
+Cài đặt MongoDB container và **chỉ lắng nghe nội bộ trên `127.0.0.1`** (tuyệt đối không mở cổng 27017 ra mạng ngoài):
 ```bash
-# Chạy container MongoDB nội bộ trên VPS:
-docker run -d --name mongo_local -p 27017:27017 -v mongo_data:/data/db --restart unless-stopped mongo:7
+# Chạy container MongoDB nội bộ, chỉ bind vào localhost 127.0.0.1:
+docker run -d --name mongo_local -p 127.0.0.1:27017:27017 -v mongo_data:/data/db --restart unless-stopped mongo:7
 ```
 
 ### Bước 3: Thiết lập cấu hình `.env`
@@ -182,7 +182,13 @@ nano .env
 ```
 Đảm bảo `MONGO_URI=mongodb://127.0.0.1:27017/real_estate_db`.
 
-### Bước 4: Chạy ngầm vĩnh viễn với PM2
+### Bước 4: Khởi tạo mốc dữ liệu ban đầu (Initial Crawl)
+Trước khi đưa vào chạy ngầm tự động, chạy lệnh khởi tạo để nạp mốc dữ liệu gốc (tránh gửi hàng nghìn email rác):
+```bash
+npm run crawl:init
+```
+
+### Bước 5: Chạy ngầm vĩnh viễn với PM2
 Sử dụng công cụ quản lý tiến trình **PM2** để bot tự động khởi động cùng hệ thống và tự phục hồi nếu gặp sự cố:
 ```bash
 # Cài đặt PM2 toàn cục (nếu chưa có)
@@ -197,6 +203,19 @@ pm2 save
 
 # Xem nhật ký hoạt động thời gian thực
 pm2 logs real-estate-bot
+```
+
+---
+
+## 💾 Hướng dẫn Sao lưu & Phục hồi dữ liệu (Backup & Restore)
+
+Để đảm bảo an toàn dữ liệu trên VPS, thiết lập sao lưu định kỳ vào thư mục riêng:
+```bash
+# Sao lưu cơ sở dữ liệu ra thư mục:
+mongodump --uri="mongodb://127.0.0.1:27017/real_estate_db" --out=/opt/backups/$(date +%F)
+
+# Phục hồi dữ liệu từ bản sao lưu:
+mongorestore --uri="mongodb://127.0.0.1:27017/real_estate_db" /opt/backups/<TÊN_THƯ_MỤC_NGÀY>/real_estate_db
 ```
 
 ---
