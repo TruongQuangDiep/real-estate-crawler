@@ -256,9 +256,73 @@ async function sendTestEmail() {
   return { sent: true, messageId: info.messageId, to: smtpConfig.to };
 }
 
+/**
+ * Gửi email cảnh báo sự cố kỹ thuật độc lập
+ * TUYỆT ĐỐI KHÔNG làm thay đổi trạng thái is_notified của các căn hộ đang chờ thông báo!
+ */
+async function sendErrorAlert(failedSources = [], errorMessage = '') {
+  const smtpConfig = getSmtpConfig();
+  if (!smtpConfig.valid) {
+    console.warn('[Mailer] ⚠️ Không thể gửi email cảnh báo sự cố do thiếu cấu hình SMTP trong .env');
+    return { sent: false };
+  }
+
+  const now = new Date();
+  const timeStr = formatEmailTimestamp(now);
+  const subject = `[CẢNH BÁO HỆ THỐNG] Sự cố đồng bộ dữ liệu rổ hàng BĐS (${timeStr})`;
+
+  const sourceListHtml = failedSources
+    .map(
+      (s) => `
+    <li style="margin-bottom: 6px;">
+      <strong>${escapeHtml(s.source || 'Nguồn không rõ')}:</strong> 
+      <span style="color: #dc2626;">${escapeHtml(s.error || s.error_message || 'Gặp sự cố kết nối trong phiên quét')}</span>
+    </li>
+  `
+    )
+    .join('');
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 650px; margin: 20px auto; border: 1px solid #fca5a5; border-radius: 8px; overflow: hidden; background-color: #ffffff;">
+      <div style="background-color: #dc2626; color: #ffffff; padding: 18px 24px;">
+        <h2 style="margin: 0; font-size: 18px;">⚠️ CẢNH BÁO SỰ CỐ ĐỒNG BỘ DỮ LIỆU</h2>
+        <div style="font-size: 12px; margin-top: 4px; color: #fee2e2;">Thời gian phát hiện: ${escapeHtml(timeStr)}</div>
+      </div>
+      <div style="padding: 20px 24px; color: #334155; line-height: 1.6; font-size: 13px;">
+        <p>Hệ thống Crawler phát hiện phiên quét dữ liệu tự động gặp sự cố:</p>
+        <ul style="background-color: #fef2f2; padding: 14px 24px; border-radius: 6px; border-left: 4px solid #dc2626; margin: 12px 0;">
+          ${sourceListHtml || `<li>${escapeHtml(errorMessage || 'Lỗi không xác định')}</li>`}
+        </ul>
+        <p style="margin-top: 15px; font-size: 12px; color: #64748b;">
+          <em>Ghi chú: Toàn bộ căn hộ mới thu thập trước đó vẫn được bảo toàn nguyên vẹn trong MongoDB và sẽ được tổng hợp đầy đủ trong báo cáo buổi sáng lúc 07:00.</em>
+        </p>
+      </div>
+      <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 12px 24px; text-align: center; font-size: 11px; color: #94a3b8;">
+        Real Estate Inventory Crawler System · Thông báo tự động
+      </div>
+    </div>
+  `;
+
+  const transporter = createMailTransporter(smtpConfig);
+  try {
+    const info = await transporter.sendMail({
+      from: smtpConfig.from,
+      to: smtpConfig.to,
+      subject,
+      html,
+    });
+    console.log(`[Mailer Alert] 🚨 Đã gửi email cảnh báo sự cố tới ${smtpConfig.to}! (MessageId: ${info.messageId})`);
+    return { sent: true, messageId: info.messageId };
+  } catch (err) {
+    console.error(`[Mailer Alert] ❌ Không thể gửi email cảnh báo:`, err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
 module.exports = {
   buildDailyReport,
   sendNotificationEmail,
+  sendErrorAlert,
   sendTestEmail,
   getSmtpConfig,
   escapeHtml,

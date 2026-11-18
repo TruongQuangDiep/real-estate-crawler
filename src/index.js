@@ -4,11 +4,12 @@ const mongoose = require('mongoose');
 const { connectDB } = require('./db');
 const { crawlAllHisaleProjects } = require('./crawlers/hisaleCrawler');
 const { crawlAllSaleProProjects } = require('./crawlers/saleproCrawler');
-const { crawlAllSaleProHighRiseCrawler, crawlAllSaleProHighRiseProjects } = require('./crawlers/saleproHighRiseCrawler');
-const { sendNotificationEmail } = require('./mailer');
+const { crawlAllSaleProHighRiseProjects } = require('./crawlers/saleproHighRiseCrawler');
+const { sendNotificationEmail, sendErrorAlert } = require('./mailer');
 const CrawlLog = require('./models/CrawlLog');
 
 let isRunning = false;
+let lastReportSentDate = null;
 
 /**
  * Điều phối thực thi và ghi vết lịch sử (CrawlLog) cho một nguồn cào cụ thể
@@ -114,23 +115,35 @@ async function runJob(isInitialSync = false, targetSource = null, shouldSendMail
     }
 
     // 4. BÁO CÁO QUA EMAIL & EXCEL
-    const hasError = stats.some((s) => s.status === 'FAILED');
+    const failedStats = stats.filter((s) => s.status === 'FAILED');
+    const hasError = failedStats.length > 0;
     const mailOnError = process.env.MAIL_ON_ERROR !== 'false';
 
-    if (!isInitialSync && (shouldSendMail || (hasError && mailOnError))) {
-      console.log(`\n[Mailer] 📊 Đang tổng hợp kết quả phiên cào để tạo báo cáo Email & Excel...`);
-      const mailResult = await sendNotificationEmail(stats);
+    if (!isInitialSync) {
+      if (shouldSendMail) {
+        // Chế độ yêu cầu gửi mail ngay (như khi test --now)
+        console.log(`\n[Mailer] 📊 Đang tổng hợp kết quả phiên cào để tạo báo cáo Email & Excel...`);
+        const mailResult = await sendNotificationEmail(stats);
 
-      if (mailResult && mailResult.sent) {
-        const logIds = stats.map((s) => s.logId).filter(Boolean);
-        if (logIds.length > 0) {
-          await CrawlLog.updateMany({ _id: { $in: logIds } }, { $set: { mail_sent: true } });
+        if (mailResult && mailResult.sent) {
+          const logIds = stats.map((s) => s.logId).filter(Boolean);
+          if (logIds.length > 0) {
+            await CrawlLog.updateMany({ _id: { $in: logIds } }, { $set: { mail_sent: true } });
+          }
         }
+      } else if (hasError && mailOnError) {
+        // Phiên cào định kỳ gặp lỗi nghiêm trọng: Gửi email cảnh báo kỹ thuật độc lập
+        // (TUYỆT ĐỐI KHÔNG làm thay đổi is_notified của các căn mới đang chờ thông báo buổi sáng)
+        console.warn(`\n[Mailer Alert] 🚨 Phiên quét có nguồn thất bại! Đang gửi email cảnh báo sự cố kỹ thuật...`);
+        await sendErrorAlert(
+          failedStats,
+          failedStats.map((f) => `[${f.source}]: ${f.error || 'Gặp sự cố kết nối'}`).join('; ')
+        );
+      } else {
+        console.log(`\n[Job] ℹ️ Phiên quét định kỳ hoàn tất. Dữ liệu căn mới đã lưu an toàn vào MongoDB và chờ lịch gửi email tổng hợp buổi sáng.`);
       }
-    } else if (isInitialSync) {
-      console.log(`\n[Job] ✅ Chế độ --init: Đã nạp dữ liệu nền thành công và đánh dấu đã thông báo (không spam mail).`);
     } else {
-      console.log(`\n[Job] ℹ️ Phiên quét định kỳ hoàn tất. Dữ liệu căn mới đã lưu vào MongoDB và chờ lịch gửi email tổng hợp buổi sáng.`);
+      console.log(`\n[Job] ✅ Chế độ --init: Đã nạp dữ liệu nền thành công và đánh dấu đã thông báo (không spam mail).`);
     }
 
     console.log(`\n====================================================================`);
@@ -148,43 +161,85 @@ async function runJob(isInitialSync = false, targetSource = null, shouldSendMail
 
 /**
  * Hàm kích hoạt gửi email báo cáo tổng hợp buổi sáng (Morning Digest)
+ * @param {boolean} isForced - Bỏ qua cơ chế khóa chống gửi trùng trong ngày (cho lệnh --digest)
  */
-async function runDailyReportDigest() {
+async function runDailyReportDigest(isForced = false) {
   console.log(`\n====================================================================`);
   console.log(`📬 [MAIL DIGEST] KÍCH HOẠT BÁO CÁO ĐỊNH KỲ BUỔI SÁNG - ${new Date().toLocaleString('vi-VN')}`);
   console.log(`====================================================================`);
 
+  // 1. Chờ phiên quét đang chạy dở hoàn tất (nếu có)
+  if (isRunning) {
+    console.log('[Mail Digest] ⏳ Đang có phiên quét cào dữ liệu diễn ra. Đang chờ phiên quét hoàn tất để cập nhật dữ liệu mới nhất...');
+    let waitCount = 0;
+    while (isRunning && waitCount < 60) {
+      await new Promise((r) => setTimeout(r, 10000));
+      waitCount++;
+    }
+  }
+
+  // 2. Chống gửi trùng email báo cáo trong cùng 1 ngày
+  const todayDateStr = new Date().toLocaleDateString('vi-VN', {
+    timeZone: process.env.CRON_TIMEZONE || 'Asia/Ho_Chi_Minh',
+  });
+
+  if (!isForced && lastReportSentDate === todayDateStr) {
+    console.log(`[Mail Digest] ℹ️ Báo cáo buổi sáng ngày [${todayDateStr}] đã được gửi trước đó. Bỏ qua để tránh gửi trùng.`);
+    return;
+  }
+
   try {
-    // Thu thập kết quả quét mới nhất của từng nguồn trong vòng 24 giờ qua
+    // 3. Tổng hợp dữ liệu của TẤT CẢ các phiên quét trong vòng 24 giờ qua
+    const sinceTime = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const recentLogs = await CrawlLog.find({
-      started_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      started_at: { $gte: sinceTime },
     })
       .sort({ started_at: -1 })
       .lean();
 
-    const sourceMap = new Map();
-    for (const log of recentLogs) {
-      if (!sourceMap.has(log.source)) {
-        sourceMap.set(log.source, {
-          source: log.source,
-          totalScanned: log.total_scanned || 0,
-          newUnitsCount: log.new_units_count || 0,
-          status: log.status || 'SUCCESS',
+    const targetSources = ['HiSale', 'SalePro Thấp tầng', 'SalePro Cao tầng'];
+    const stats = [];
+
+    for (const src of targetSources) {
+      const logsForSrc = recentLogs.filter((l) => l.source === src);
+
+      if (logsForSrc.length === 0) {
+        // KHÔNG mặc định SUCCESS nếu không có dữ liệu quét trong 24h
+        stats.push({
+          source: src,
+          totalScanned: 0,
+          newUnitsCount: 0,
+          status: 'FAILED',
+          error: 'Không có phiên quét nào được ghi nhận trong 24 giờ qua',
+        });
+      } else {
+        const latestLog = logsForSrc[0];
+        // Tổng hợp toàn bộ số căn mới của TẤT CẢ các phiên cào trong 24h qua:
+        const totalNewInPeriod = logsForSrc.reduce((sum, l) => sum + (l.new_units_count || 0), 0);
+
+        // Phân loại trạng thái chuẩn xác:
+        const hasFailedRun = logsForSrc.some((l) => l.status === 'FAILED');
+        const hasSuccessRun = logsForSrc.some((l) => l.status === 'SUCCESS' || l.status === 'PARTIAL');
+        let aggregatedStatus = 'SUCCESS';
+        if (hasFailedRun) {
+          aggregatedStatus = hasSuccessRun ? 'PARTIAL' : 'FAILED';
+        }
+
+        stats.push({
+          source: src,
+          totalScanned: latestLog.total_scanned || 0,
+          newUnitsCount: totalNewInPeriod,
+          status: aggregatedStatus,
         });
       }
     }
 
-    // Đảm bảo có đủ 3 nguồn dữ liệu hiển thị trên bảng thống kê
-    const defaultSources = ['HiSale', 'SalePro Thấp tầng', 'SalePro Cao tầng'];
-    for (const src of defaultSources) {
-      if (!sourceMap.has(src)) {
-        sourceMap.set(src, { source: src, totalScanned: 0, newUnitsCount: 0, status: 'SUCCESS' });
-      }
+    // 4. Gửi email thông báo và xuất file Excel đính kèm
+    const mailResult = await sendNotificationEmail(stats);
+    if (mailResult && mailResult.sent) {
+      lastReportSentDate = todayDateStr;
+      console.log(`[Mail Digest] ✅ Hoàn tất phiên gửi báo cáo tổng hợp buổi sáng ngày [${todayDateStr}]!`);
     }
-
-    const stats = Array.from(sourceMap.values());
-    await sendNotificationEmail(stats);
-    console.log(`[Mail Digest] ✅ Hoàn tất phiên gửi báo cáo tổng hợp buổi sáng!`);
   } catch (error) {
     console.error(`[Mail Digest] ❌ Lỗi khi gửi báo cáo tổng hợp buổi sáng:`, error.message);
   }
@@ -220,7 +275,7 @@ async function main() {
     process.exit(success ? 0 : 1);
   } else if (isDigest) {
     console.log(`[Runner] Chế độ --digest: Gửi ngay báo cáo tổng hợp kèm file Excel...`);
-    await runDailyReportDigest();
+    await runDailyReportDigest(true);
     await mongoose.disconnect();
     process.exit(0);
   } else {
@@ -248,7 +303,6 @@ async function main() {
       crawlSchedule,
       async () => {
         console.log(`\n[Cron] 🔔 Đến giờ cào dữ liệu [${crawlSchedule}], bắt đầu quét...`);
-        // Nếu có cấu hình mailSchedule riêng thì phiên cào định kỳ sẽ không bắn mail (trừ khi có lỗi)
         const sendMailImmediately = !mailSchedule;
         await runJob(false, null, sendMailImmediately);
       },
@@ -261,7 +315,7 @@ async function main() {
         mailSchedule,
         async () => {
           console.log(`\n[Cron Mail] 📬 Đến giờ hẹn gửi báo cáo buổi sáng [${mailSchedule}], bắt đầu tổng hợp...`);
-          await runDailyReportDigest();
+          await runDailyReportDigest(false);
         },
         { timezone }
       );
