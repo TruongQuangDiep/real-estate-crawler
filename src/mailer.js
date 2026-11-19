@@ -154,9 +154,10 @@ async function sendNotificationEmail(stats = []) {
 }
 
 /**
- * Gửi email kiểm thử mẫu (bao gồm bảng HTML mẫu và file Excel đính kèm)
+ * Gửi email kiểm thử mẫu (hỗ trợ cả trường hợp có căn mới và trường hợp không có căn mới)
+ * @param {object} options - { isEmpty: boolean }
  */
-async function sendTestEmail() {
+async function sendTestEmail(options = {}) {
   const smtpConfig = getSmtpConfig();
   if (!smtpConfig.valid) {
     throw new Error('Chưa cấu hình đầy đủ SMTP_USER, SMTP_PASS hoặc MAIL_TO thật trong .env.');
@@ -165,85 +166,94 @@ async function sendTestEmail() {
   const transporter = createMailTransporter(smtpConfig);
   await transporter.verify();
 
-  const sampleUnits = [
-    {
-      source: 'salepro',
-      unit_code: 'S6.0204.19',
-      project_name: 'VINHOMES GRAND PARK',
-      subdivision: 'Origami',
-      building: 'S6.02',
-      floor: '04',
-      unit_type: 'STUDIO',
-      direction: 'ĐÔNG NAM',
-      area_land: 30.2,
-      area_build: 33.6,
-      price: 2570402896,
-      price_text: '2.57 tỷ',
-      price_tts: 2090684015,
-      status: 'Còn hàng',
-      delivery_standard: 'Bàn giao cơ bản',
-      bank_support: 'Hỗ trợ vay 70%',
-      price_list_url: 'https://salepro.com/project-detail/vinhomes-grand-park#quy-can-cao-tang',
-      created_at: new Date(),
-    },
-    {
-      source: 'hisale',
-      unit_code: 'BE601.S13',
-      project_name: 'VINHOMES GRAND PARK',
-      subdivision: 'BEVERLY',
-      building: 'BE601',
-      floor: '01',
-      unit_type: 'SHOP',
-      direction: 'TÂY BẮC',
-      area_land: 73.6,
-      area_build: 79.6,
-      price: 12593328905,
-      price_text: '12.59 tỷ',
-      price_tts: 12724422260,
-      status: 'Còn hàng',
-      delivery_standard: 'Bàn giao thô',
-      bank_support: 'Ân hạn nợ gốc 24 tháng',
-      price_list_url: 'https://www.hisale.com/du-an/vinhomes-grand-park',
-      created_at: new Date(),
-    },
-    {
-      source: 'hisale',
-      unit_code: 'VT-01',
-      project_name: 'VINHOMES GLOBAL GATE HẠ LONG',
-      subdivision: 'Vịnh Tây',
-      unit_type: 'Liền kề',
-      delivery_standard: 'Bàn giao thô',
-      direction: 'Đông Bắc',
-      area_land: 80,
-      area_build: 260,
-      price: 15200000000,
-      price_text: '15.20 tỷ',
-      status: 'Còn hàng',
-      created_at: new Date(),
-    },
-  ];
+  const isEmpty = options.isEmpty === true || process.argv.includes('--empty');
+
+  const sampleUnits = isEmpty
+    ? []
+    : [
+        {
+          source: 'salepro',
+          unit_code: 'S6.0204.19',
+          project_name: 'VINHOMES GRAND PARK',
+          subdivision: 'Origami',
+          building: 'S6.02',
+          floor: '04',
+          unit_type: 'STUDIO',
+          direction: 'ĐÔNG NAM',
+          area_land: 30.2,
+          area_build: 33.6,
+          price: 2570402896,
+          price_text: '2.57 tỷ',
+          price_tts: 2090684015,
+          status: 'Còn hàng',
+          delivery_standard: 'Bàn giao cơ bản',
+          bank_support: 'Hỗ trợ vay 70%',
+          price_list_url: 'https://salepro.com/project-detail/vinhomes-grand-park#quy-can-cao-tang',
+          created_at: new Date(),
+        },
+        {
+          source: 'hisale',
+          unit_code: 'BE601.S13',
+          project_name: 'VINHOMES GRAND PARK',
+          subdivision: 'BEVERLY',
+          building: 'BE601',
+          floor: '01',
+          unit_type: 'SHOP',
+          direction: 'TÂY BẮC',
+          area_land: 73.6,
+          area_build: 79.6,
+          price: 12593328905,
+          price_text: '12.59 tỷ',
+          price_tts: 12724422260,
+          status: 'Còn hàng',
+          delivery_standard: 'Bàn giao thô',
+          bank_support: 'Ân hạn nợ gốc 24 tháng',
+          price_list_url: 'https://www.hisale.com/du-an/vinhomes-grand-park',
+          created_at: new Date(),
+        },
+        {
+          source: 'hisale',
+          unit_code: 'VT-01',
+          project_name: 'VINHOMES GLOBAL GATE HẠ LONG',
+          subdivision: 'Vịnh Tây',
+          unit_type: 'Liền kề',
+          delivery_standard: 'Bàn giao thô',
+          direction: 'Đông Bắc',
+          area_land: 80,
+          area_build: 260,
+          price: 15200000000,
+          price_text: '15.20 tỷ',
+          status: 'Còn hàng',
+          created_at: new Date(),
+        },
+      ];
 
   const sampleStats = [
-    { source: 'HiSale', totalScanned: 1131, newUnitsCount: 2, status: 'SUCCESS' },
-    { source: 'SalePro Thấp tầng', totalScanned: 5397, newUnitsCount: 0, status: 'SUCCESS' },
-    { source: 'SalePro Cao tầng', totalScanned: 8208, newUnitsCount: 1, status: 'SUCCESS' },
+    { source: 'HiSale', totalScanned: 7934, newUnitsCount: isEmpty ? 0 : 2, status: 'SUCCESS' },
+    { source: 'SalePro Thấp tầng', totalScanned: 5519, newUnitsCount: 0, status: 'SUCCESS' },
+    { source: 'SalePro Cao tầng', totalScanned: 9874, newUnitsCount: isEmpty ? 0 : 1, status: 'SUCCESS' },
   ];
 
   const now = new Date();
   const dateStr = now.toLocaleDateString('vi-VN', {
     timeZone: process.env.CRON_TIMEZONE || 'Asia/Ho_Chi_Minh',
   });
-  const subject = `[TEST - RỔ HÀNG BĐS] Kiểm thử báo cáo mới kèm file Excel (${formatEmailTimestamp(now)})`;
+
+  const subject = isEmpty
+    ? `[TEST - RỔ HÀNG BĐS] ${dateStr} - ĐỒNG BỘ ỔN ĐỊNH (Không có căn mới) (${formatEmailTimestamp(now)})`
+    : `[TEST - RỔ HÀNG BĐS] ${dateStr} - +3 CĂN MỚI (Kèm file Excel) (${formatEmailTimestamp(now)})`;
+
   const html = buildDailyReport({ stats: sampleStats, units: sampleUnits, generatedAt: now });
 
-  const excelBuffer = await buildExcelReport(sampleUnits);
-  const attachments = [
-    {
+  const attachments = [];
+  if (sampleUnits.length > 0) {
+    const excelBuffer = await buildExcelReport(sampleUnits);
+    attachments.push({
       filename: `Bao_cao_ro_hang_${dateStr.replace(/\//g, '-')}.xlsx`,
       content: excelBuffer,
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    },
-  ];
+    });
+  }
 
   const info = await transporter.sendMail({
     from: smtpConfig.from,
@@ -253,7 +263,7 @@ async function sendTestEmail() {
     attachments,
   });
 
-  return { sent: true, messageId: info.messageId, to: smtpConfig.to };
+  return { sent: true, messageId: info.messageId, to: smtpConfig.to, isEmpty };
 }
 
 /**

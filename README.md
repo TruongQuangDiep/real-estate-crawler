@@ -149,7 +149,8 @@ MAIL_MAX_PREVIEW_UNITS=15
 
 | Lệnh | Chức năng | Mô tả |
 | :--- | :--- | :--- |
-| `npm run test:mail` | **Test gửi email** | Gửi ngay 1 email mẫu kèm file Excel đính kèm tới danh sách `MAIL_TO` để kiểm tra kết nối SMTP và giao diện hiển thị. |
+| `npm run test:mail` | **Test gửi email (Có căn mới)** | Gửi ngay 1 email mẫu có căn mới kèm file Excel 18 cột đính kèm để kiểm tra giao diện. |
+| `npm run test:mail:empty` | **Test gửi email (Không có căn mới)** | Gửi ngay 1 email mẫu mô phỏng kịch bản không phát sinh căn mới để xem giao diện báo cáo ổn định. |
 | `npm run crawl:salepro` | **Khởi tạo dữ liệu SalePro** | Nạp toàn bộ dự án thấp tầng và cao tầng của SalePro vào local MongoDB mà không gửi mail. |
 | `npm run crawl:hisale` | **Khởi tạo dữ liệu HiSale** | Nạp toàn bộ dữ liệu dự án của sàn HiSale vào local MongoDB mà không gửi mail. |
 | `npm run crawl:init` | **Khởi tạo toàn bộ** | Quét và đồng bộ mốc dữ liệu gốc cho cả 2 sàn cùng lúc (không gửi mail). |
