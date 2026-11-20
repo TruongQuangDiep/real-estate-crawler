@@ -68,6 +68,63 @@ const projectSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
+  // Google Drive & Image Storage V2 fields
+  drive_folder_id: {
+    type: String,
+    default: ''
+  },
+  drive_folder_url: {
+    type: String,
+    default: ''
+  },
+  project_image_urls: {
+    type: [String],
+    default: []
+  },
+  drive_project_image_urls: {
+    type: [String],
+    default: []
+  },
+  layout_image_urls: {
+    type: [String],
+    default: []
+  },
+  drive_layout_image_urls: {
+    type: [String],
+    default: []
+  },
+  document_urls: {
+    type: [String],
+    default: []
+  },
+  stored_images: {
+    type: [
+      {
+        original_url: { type: String, default: '' },
+        drive_file_id: { type: String, default: '' },
+        drive_url: { type: String, default: '' },
+        sha256: { type: String, default: '' },
+        mime_type: { type: String, default: '' },
+        file_size: { type: Number, default: 0 },
+        image_type: {
+          type: String,
+          enum: ['_PROJECT', '_LAYOUT'],
+          default: '_PROJECT'
+        },
+        uploaded_at: { type: Date, default: Date.now }
+      }
+    ],
+    default: []
+  },
+  image_sync_status: {
+    type: String,
+    enum: ['PENDING', 'PROCESSING', 'SUCCESS', 'PARTIAL', 'FAILED', 'NO_IMAGE'],
+    default: 'PENDING'
+  },
+  image_synced_at: {
+    type: Date,
+    default: null
+  },
   updated_at: {
     type: Date,
     default: Date.now

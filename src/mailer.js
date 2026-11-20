@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const Unit = require('./models/Unit');
+const ReportLog = require('./models/ReportLog');
 const { buildExcelReport } = require('./services/excelService');
 const { buildDailyReport, escapeHtml, formatPriceVnd } = require('./services/reportService');
 
@@ -145,6 +146,25 @@ async function sendNotificationEmail(stats = []) {
       const unitIds = units.map((u) => u._id);
       await Unit.updateMany({ _id: { $in: unitIds } }, { $set: { is_notified: true } });
     }
+
+    // Ghi nhận lịch sử gửi báo cáo ngày vào MongoDB để chống gửi trùng khi restart VPS
+    const todayDateKey = now.toISOString().slice(0, 10);
+    await ReportLog.findOneAndUpdate(
+      { report_type: 'DAILY', period_key: todayDateKey },
+      {
+        report_type: 'DAILY',
+        period_key: todayDateKey,
+        period_start: new Date(Date.now() - 24 * 60 * 60 * 1000),
+        period_end: now,
+        sent_at: now,
+        status: 'SUCCESS',
+        total_units: units.length,
+        summary: { stats, unitsCount: units.length },
+        recipients: smtpConfig.to.split(',').map((e) => e.trim()),
+        excel_file_name: units.length > 0 ? `Bao_cao_ro_hang_${dateStr.replace(/\//g, '-')}.xlsx` : '',
+      },
+      { upsert: true, new: true }
+    ).catch((err) => console.warn('[Mailer] ⚠️ Không thể lưu ReportLog:', err.message));
 
     return { sent: true, count: units.length, messageId: info.messageId };
   } catch (error) {

@@ -8,15 +8,25 @@
     "crawl:now": "node src/index.js --now",
     "crawl:init": "node src/index.js --init",
     "crawl:salepro": "node src/index.js --init --source=salepro",
+    "crawl:hisale": "node src/index.js --init --source=hisale",
     "test:mail": "node src/testMail.js",
     "test:mail:empty": "node src/testMail.js --empty",
     "report:now": "node src/index.js --digest",
-    "crawl:hisale": "node src/index.js --init --source=hisale"
+    "drive:auth": "node src/scripts/authorizeDrive.js",
+    "drive:create-root": "node src/scripts/createRootFolder.js",
+    "drive:picker": "node src/scripts/grantFolderPicker.js",
+    "drive:test": "node src/scripts/testDrive.js",
+    "images:sync": "node src/scripts/syncImages.js",
+    "report:weekly": "node src/scripts/weeklyReport.js --send",
+    "test:mail:weekly": "node src/scripts/weeklyReport.js --test",
+    "test": "node test/verifyV2.js"
   },
   "dependencies": {
+    "@google-cloud/local-auth": "^3.0.1",
     "axios": "^1.7.9",
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
+    "googleapis": "^190.0.0",
     "mongoose": "^8.8.1",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.16"

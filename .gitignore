@@ -9,6 +9,11 @@ node_modules/
 .env
 .env.*
 !.env.example
+credentials/
+client_secret*.json
+token.json
+credentials.json
+*.token.json
 
 # Generated reports & database backups
 reports/

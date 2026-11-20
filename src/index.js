@@ -7,6 +7,9 @@ const { crawlAllSaleProProjects } = require('./crawlers/saleproCrawler');
 const { crawlAllSaleProHighRiseProjects } = require('./crawlers/saleproHighRiseCrawler');
 const { sendNotificationEmail, sendErrorAlert } = require('./mailer');
 const CrawlLog = require('./models/CrawlLog');
+const ReportLog = require('./models/ReportLog');
+const { sendWeeklyReport } = require('./services/weeklyReportService');
+const { syncPendingImages } = require('./services/imageStorageService');
 
 let isRunning = false;
 let lastReportSentDate = null;
@@ -178,14 +181,27 @@ async function runDailyReportDigest(isForced = false) {
     }
   }
 
-  // 2. Chống gửi trùng email báo cáo trong cùng 1 ngày
+  // 2. Chống gửi trùng email báo cáo trong cùng 1 ngày (kiểm tra cả RAM và MongoDB ReportLog)
   const todayDateStr = new Date().toLocaleDateString('vi-VN', {
     timeZone: process.env.CRON_TIMEZONE || 'Asia/Ho_Chi_Minh',
   });
+  const todayDateKey = new Date().toISOString().slice(0, 10);
 
-  if (!isForced && lastReportSentDate === todayDateStr) {
-    console.log(`[Mail Digest] ℹ️ Báo cáo buổi sáng ngày [${todayDateStr}] đã được gửi trước đó. Bỏ qua để tránh gửi trùng.`);
-    return;
+  if (!isForced) {
+    if (lastReportSentDate === todayDateStr) {
+      console.log(`[Mail Digest] ℹ️ Báo cáo buổi sáng ngày [${todayDateStr}] đã được gửi trước đó. Bỏ qua để tránh gửi trùng.`);
+      return;
+    }
+    const alreadySentInDb = await ReportLog.findOne({
+      report_type: 'DAILY',
+      period_key: todayDateKey,
+      status: 'SUCCESS',
+    });
+    if (alreadySentInDb) {
+      console.log(`[Mail Digest] ℹ️ Báo cáo buổi sáng ngày [${todayDateStr}] đã được gửi thành công lúc ${alreadySentInDb.sent_at.toLocaleString('vi-VN')} (xác nhận từ MongoDB). Bỏ qua.`);
+      lastReportSentDate = todayDateStr;
+      return;
+    }
   }
 
   try {
@@ -252,6 +268,8 @@ async function main() {
   const isInit = args.includes('--init');
   const isNow = args.includes('--now');
   const isDigest = args.includes('--digest');
+  const isWeekly = args.includes('--weekly') || args.includes('--report-weekly');
+  const isSyncImages = args.includes('--sync-images') || args.includes('--images-sync');
 
   // Lọc nguồn: --source=salepro hoặc --source=hisale
   let targetSource = null;
@@ -278,11 +296,27 @@ async function main() {
     await runDailyReportDigest(true);
     await mongoose.disconnect();
     process.exit(0);
+  } else if (isWeekly) {
+    console.log(`[Runner] Chế độ --weekly: Gửi báo cáo tuần thủ công...`);
+    await sendWeeklyReport({ isForced: true });
+    await mongoose.disconnect();
+    process.exit(0);
+  } else if (isSyncImages) {
+    const limitArg = args.find((a) => /^\d+$/.test(a));
+    const limit = limitArg ? Number(limitArg) : null;
+    console.log(`[Runner] Chế độ --sync-images: Bắt đầu đồng bộ ảnh Google Drive (giới hạn: ${limit || 'mặc định'})...`);
+    await syncPendingImages(limit);
+    await mongoose.disconnect();
+    process.exit(0);
   } else {
     // Chế độ lịch tự động (Cron Job)
     const crawlSchedule = process.env.CRON_SCHEDULE || '0 6,10,14,18,22 * * *';
     const mailSchedule = (process.env.MAIL_CRON_SCHEDULE || '0 7 * * *').trim();
     const timezone = process.env.CRON_TIMEZONE || 'Asia/Ho_Chi_Minh';
+    const weeklyEnabled = process.env.WEEKLY_REPORT_ENABLED === 'true';
+    const weeklySchedule = (process.env.WEEKLY_REPORT_CRON || '0 6 * * 1').trim();
+    const imageSyncEnabled = process.env.IMAGE_SYNC_ENABLED === 'true';
+    const imageSyncSchedule = (process.env.IMAGE_SYNC_CRON || '*/15 * * * *').trim();
 
     if (!cron.validate(crawlSchedule)) {
       throw new Error(`CRON_SCHEDULE không hợp lệ: ${crawlSchedule}`);
@@ -290,12 +324,20 @@ async function main() {
     if (mailSchedule && !cron.validate(mailSchedule)) {
       throw new Error(`MAIL_CRON_SCHEDULE không hợp lệ: ${mailSchedule}`);
     }
+    if (weeklyEnabled && weeklySchedule && !cron.validate(weeklySchedule)) {
+      throw new Error(`WEEKLY_REPORT_CRON không hợp lệ: ${weeklySchedule}`);
+    }
+    if (imageSyncEnabled && imageSyncSchedule && !cron.validate(imageSyncSchedule)) {
+      throw new Error(`IMAGE_SYNC_CRON không hợp lệ: ${imageSyncSchedule}`);
+    }
 
-    console.log(`[Scheduler] ⏰ Bot đã khởi động dịch vụ tự động:`);
+    console.log(`[Scheduler] ⏰ Bot V2 đã khởi động dịch vụ tự động:`);
     console.log(`  - Lịch cào dữ liệu (Crawl Schedule): [${crawlSchedule}]`);
-    console.log(`  - Lịch gửi báo cáo email (Mail Schedule): [${mailSchedule}]`);
+    console.log(`  - Lịch gửi báo cáo ngày (Daily Mail): [${mailSchedule || 'Sau mỗi phiên'}]`);
+    console.log(`  - Lịch gửi báo cáo tuần (Weekly Report): [${weeklyEnabled ? weeklySchedule : 'Đang tắt'}]`);
+    console.log(`  - Lịch đồng bộ ảnh Drive (Image Sync): [${imageSyncEnabled ? imageSyncSchedule : 'Đang tắt'}]`);
     console.log(`  - Múi giờ hoạt động: ${timezone}`);
-    console.log(`  - Chế độ báo cáo: ${process.env.MAIL_REPORT_MODE || 'DAILY'}`);
+    console.log(`  - Chế độ báo cáo ngày: ${process.env.MAIL_REPORT_MODE || 'DAILY'}`);
     console.log(`\n(Mẹo: Muốn quét và gửi email test ngay lập tức, gõ: npm run crawl:now)\n`);
 
     // 1. Lịch cào dữ liệu: Tích lũy căn mới vào MongoDB
@@ -316,6 +358,30 @@ async function main() {
         async () => {
           console.log(`\n[Cron Mail] 📬 Đến giờ hẹn gửi báo cáo buổi sáng [${mailSchedule}], bắt đầu tổng hợp...`);
           await runDailyReportDigest(false);
+        },
+        { timezone }
+      );
+    }
+
+    // 3. Lịch gửi báo cáo tuần (Sáng thứ Hai)
+    if (weeklyEnabled && weeklySchedule) {
+      cron.schedule(
+        weeklySchedule,
+        async () => {
+          console.log(`\n[Cron Weekly] 📊 Đến giờ hẹn gửi báo cáo tuần [${weeklySchedule}], bắt đầu tổng hợp...`);
+          await sendWeeklyReport();
+        },
+        { timezone }
+      );
+    }
+
+    // 4. Lịch đồng bộ hình ảnh Google Drive
+    if (imageSyncEnabled && imageSyncSchedule) {
+      cron.schedule(
+        imageSyncSchedule,
+        async () => {
+          console.log(`\n[Cron ImageSync] 📸 Bắt đầu quét và đồng bộ hình ảnh Google Drive...`);
+          await syncPendingImages();
         },
         { timezone }
       );

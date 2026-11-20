@@ -82,6 +82,68 @@ const unitSchema = new mongoose.Schema(
       type: [String], // Danh sách link ảnh layout, bảng giá
       default: []
     },
+    // Google Drive & Image Storage V2 fields
+    drive_image_urls: {
+      type: [String], // Danh sách link ảnh riêng của căn trên Google Drive
+      default: []
+    },
+    project_image_urls: {
+      type: [String], // URL ảnh phối cảnh / avatar dự án dùng chung
+      default: []
+    },
+    drive_project_image_urls: {
+      type: [String], // URL ảnh dự án đã đồng bộ trên Google Drive
+      default: []
+    },
+    layout_image_urls: {
+      type: [String], // URL ảnh layout mặt bằng
+      default: []
+    },
+    drive_layout_image_urls: {
+      type: [String], // URL ảnh layout mặt bằng trên Google Drive
+      default: []
+    },
+    document_urls: {
+      type: [String], // Tài liệu liên quan (PDF, brochure...)
+      default: []
+    },
+    drive_folder_id: {
+      type: String, // ID thư mục riêng của căn trên Google Drive
+      default: ''
+    },
+    drive_folder_url: {
+      type: String, // Link trực tiếp mở thư mục căn trên Google Drive
+      default: ''
+    },
+    stored_images: {
+      type: [
+        {
+          original_url: { type: String, default: '' },
+          drive_file_id: { type: String, default: '' },
+          drive_url: { type: String, default: '' },
+          sha256: { type: String, default: '' },
+          mime_type: { type: String, default: '' },
+          file_size: { type: Number, default: 0 },
+          image_type: {
+            type: String,
+            enum: ['UNIT', '_PROJECT', '_LAYOUT'],
+            default: 'UNIT'
+          },
+          uploaded_at: { type: Date, default: Date.now }
+        }
+      ],
+      default: []
+    },
+    image_sync_status: {
+      type: String,
+      enum: ['PENDING', 'PROCESSING', 'SUCCESS', 'PARTIAL', 'FAILED', 'NO_IMAGE'],
+      default: 'PENDING',
+      index: true
+    },
+    image_synced_at: {
+      type: Date,
+      default: null
+    },
     raw_data: {
       type: Object, // Lưu toàn bộ data JSON gốc từ API
       default: {}
