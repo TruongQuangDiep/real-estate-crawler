@@ -1,33 +1,38 @@
-# 🏢 Real Estate Inventory Crawler & Media Storage System (V2)
+# 🏢 Real Estate Inventory Crawler & Media Storage System (V3)
 
-Hệ thống backend tự động thu thập, chuẩn hóa, đối chiếu dữ liệu rổ hàng bất động sản từ các nền tảng **HiSale** (`hisale.vn`) và **SalePro** (`salepro.com`), lưu trữ nội bộ vào cơ sở dữ liệu **MongoDB Local** trên máy chủ VPS, tự động đồng bộ hình ảnh vào **Google Drive** theo phân cấp thư mục và gửi báo cáo định kỳ (báo cáo ngày & báo cáo tuần) kèm file Excel 24 cột chi tiết qua Gmail SMTP.
+Hệ thống backend tự động thu thập, chuẩn hóa, đối chiếu dữ liệu rổ hàng bất động sản từ các nền tảng **HiSale** (`hisale.vn`) và **SalePro** (`salepro.com`), lưu trữ nội bộ vào cơ sở dữ liệu **MongoDB Local** trên máy chủ VPS, tự động đồng bộ hình ảnh vào **Google Drive** theo phân cấp thư mục 3 tầng và gửi báo cáo định kỳ (báo cáo ngày & báo cáo tuần) kèm file Excel 26 cột chi tiết qua Gmail SMTP.
 
 ---
 
-## 🌟 Tính năng nổi bật trên phiên bản V2
+## 🌟 Tính năng nổi bật trên phiên bản V3 (Chuyên sâu SalePro Media)
 
-- **Đồng bộ hình ảnh Google Drive tự động (Google Drive API v3)**:
-  - Tự động tạo cây thư mục chuẩn: `Nguồn / Tên Dự Án / Mã Căn` bên trong Thư mục tổng công ty chỉ định.
-  - Tải ảnh, xác thực định dạng, kiểm tra kích thước tối đa (`IMAGE_MAX_SIZE_MB`).
-  - **Chống trùng lặp nội dung bằng SHA-256**: Không upload lại ảnh đã tồn tại.
-  - Sử dụng **OAuth 2.0 & Refresh Token**: Hoạt động vĩnh viễn trên VPS mà không cần đăng nhập lại.
-  - Bảo mật tuyệt đối: Thư mục và file không bị chuyển sang public bừa bãi.
-- **Nghiệp vụ hình ảnh phân tầng chuẩn xác**:
-  - **HiSale**: Bóc tách toàn bộ mảng ảnh riêng của từng căn (`image_price_list_json`) và lưu vào thư mục riêng của căn.
-  - **SalePro (3 cấp độ rõ ràng)**:
-    - *Cấp độ 1 (Dự án)*: Tải ảnh đại diện/phối cảnh dự án vào thư mục `_Project` và liên kết với các căn cùng dự án.
-    - *Cấp độ 2 (Layout & Tài liệu)*: Bóc tách link layout thiết kế vào thư mục `_Layouts`, phân biệt rõ link ảnh với link tài liệu PDF/Web (`document_urls`).
-    - *Cấp độ 3 (Căn riêng lẻ)*: Nếu API không trả về ảnh riêng thì để trống, tuyệt đối không gán ảnh phối cảnh dự án giả làm ảnh riêng của căn.
-- **Báo cáo tuần chuyên sâu (Weekly Executive Report)**:
-  - Tự động kích hoạt vào **06:00 sáng Thứ Hai hàng tuần**.
-  - Tổng hợp dữ liệu từ 00:00 thứ Hai tuần trước đến 00:00 thứ Hai tuần hiện tại.
-  - Thống kê căn mới toàn sàn, phân bổ theo nguồn, dự án, cao tầng/thấp tầng, hiệu năng phiên quét và tiến độ đồng bộ ảnh.
-  - **Độc lập hoàn toàn với `is_notified`**: Không ảnh hưởng đến chu trình thông báo căn mới của báo cáo ngày.
-  - Lưu trạng thái gửi vào MongoDB (`ReportLog`) để chống gửi trùng khi khởi động lại VPS.
-- **Nâng cấp file Excel 24 cột chuẩn doanh nghiệp**:
-  - Giữ nguyên 18 cột truyền thống và bổ sung 6 cột Google Drive & Media mới.
-  - Tích hợp Hyperlink mở trực tiếp thư mục Google Drive của căn.
-  - Tự động ngắt dòng (`wrapText`), AutoFilter toàn bộ 24 cột và cố định dòng tiêu đề.
+- **Nâng cấp chuyên sâu Media SalePro V3**:
+  - Tích hợp 3 API công khai chính thức: `get_project_landing`, `get_project_detail`, `get_share_info` (giải mã slug liên kết).
+  - Thu thập đầy đủ dữ liệu thực tế từ: `avatar`, `banner_desktop`, `project_image`, `image_data`, `floor_plan`, `product`, `link_general`, `share_content`.
+  - Phân loại tài liệu rõ ràng: Bảng giá (`BANG_GIA`), Chính sách bán hàng (`CSBH`), Layout (`LAYOUT`), Hồ sơ pháp lý (`PHAP_LY`), Biểu mẫu cọc (`BIEU_MAU`).
+- **Cấu trúc Google Drive 3 tầng chuẩn hóa**:
+  - `_Project/`: Lưu toàn bộ ảnh đại diện, banner và phối cảnh dự án.
+  - `_FloorPlans/`: Lưu mặt bằng tổng thể, phân khu, tòa nhà và mặt bằng tầng.
+  - `_Layouts/<Category>/`: Lưu bản vẽ thiết kế theo từng phân loại chuẩn (`Studio`, `1PN`, `1PN_Plus`, `2PN`, `3PN`, `Lien_ke`, `Biet_thu_song_lap`, `Biet_thu_don_lap`, `Shophouse`, `Penthouse`...).
+  - Thư mục mã căn riêng chỉ được tạo khi thực sự có hình ảnh riêng của căn (tránh tạo thư mục rỗng).
+- **Thuật toán đối chiếu Layout đa tiêu chí (Multi-attribute Layout Matching)**:
+  - Phân tích đa tiêu chí: `project_id`, `subdivision`, `building`, `unit_type`, `area_land`, `area_build`, số phòng ngủ, mã thiết kế.
+  - Phân loại 3 mức độ khớp minh bạch:
+    - `EXACT`: Khớp chính xác cả loại căn và khoảng diện tích thiết kế.
+    - `TYPE_MATCH`: Khớp loại căn, gắn nhãn tham khảo rõ ràng `[Tham khảo: ...]`.
+    - `UNMATCHED`: Chưa đủ dữ liệu liên kết layout.
+  - Phân biệt tuyệt đối: 1PN với 1PN+, 2PN với 2PN+, Biệt thự đơn lập với Biệt thự song lập.
+  - Ghi nhận trung thực: Căn SalePro không có ảnh riêng -> `image_sync_status = 'NO_IMAGE'`, không lấy avatar dự án giả làm ảnh riêng.
+- **Tối ưu hiệu năng & Tiết kiệm lưu trữ**:
+  - Đồng bộ media cấp dự án 1 lần duy nhất cho toàn bộ các căn cùng dự án (không gọi lặp API).
+  - **Chống trùng lặp tuyệt đối bằng SHA-256**: Kiểm tra mã băm nội dung ảnh trước khi upload. Chạy lại nhiều lần 0% upload trùng.
+- **Nâng cấp Báo cáo Excel 26 cột chuẩn V3**:
+  - Giữ nguyên 18 cột truyền thống và bổ sung 8 cột Google Drive & Media.
+  - Tách biệt cột ảnh riêng, ảnh layout thiết kế, mức độ khớp layout, ảnh mặt bằng, ảnh dự án, link thư mục và tài liệu.
+  - Tất cả URL cùng loại được đặt trong 1 ô ngăn cách bằng ký tự xuống dòng `\n`.
+  - Tích hợp Hyperlink mở trực tiếp thư mục Google Drive.
+- **Bộ điều phối linh hoạt (CLI Support)**:
+  - Cho phép truyền danh sách `--project-id=1295,1341,1475...` để kiểm thử chính xác từng dự án.
 
 ---
 
@@ -138,41 +143,49 @@ Toàn bộ hình ảnh và tài liệu được lưu trữ tự động bên tro
 ```text
 [Google Drive Root Folder] (Tên: GOOGLE_DRIVE_ROOT_FOLDER_NAME / ID: GOOGLE_DRIVE_ROOT_FOLDER_ID)
 ├── HiSale/
-│   ├── Thap_tang/
-│   │   └── VINHOMES GLOBAL GATE HA LONG/
-│   │       ├── ND11-58/
-│   │       │   ├── image_01.jpg
-│   │       │   └── image_02.jpg
-│   │       └── ND11-59/
-│   │           └── image_01.jpg
-│   └── Cao_tang/
-│       └── THE CITYON - IMPERIA OCEAN CITY/
-│           └── A2.1009/
-│               ├── image_01.jpg
-│               └── image_02.jpg
+│   ├── Cao_tang/
+│   │   └── THE CITYON - IMPERIA OCEAN CITY/
+│   │       └── A2.1009/
+│   │           ├── image_01.jpg
+│   │           └── image_02.jpg
+│   └── Thap_tang/
+│       └── VINHOMES GLOBAL GATE HA LONG/
+│           ├── HG12-08/
+│           │   ├── image_01.jpg
+│           │   └── image_02.jpg
+│           └── HG12-09/
 └── SalePro/
-    ├── Thap_tang/
-    │   └── VINHOMES GRAND PARK/
-    │       ├── _Project/
-    │       │   └── project_avatar.jpg        <-- Ảnh phối cảnh đại diện dự án
-    │       ├── _Layouts/
-    │       │   ├── layout_01.png             <-- Ảnh layout mặt bằng bóc từ share_content
-    │       │   └── layout_02.png
-    │       └── BS12.1809/                    <-- Thư mục căn riêng (nếu có ảnh riêng)
-    └── Cao_tang/
-        └── VINHOMES GOLDEN CITY/
+    ├── Cao_tang/
+    │   └── Ten_du_an/ (VD: CHARMORA CITY_CT, IMPERIA SKY PARK, QTOPIA)
+    │       ├── _Project/                     <-- Ảnh đại diện, banner phối cảnh dự án
+    │       │   ├── project_avatar.jpg
+    │       │   └── banner_01.jpg
+    │       ├── _FloorPlans/                  <-- Mặt bằng tổng thể, phân khu, tòa nhà, tầng
+    │       │   ├── Mat_bang_tong_the.png
+    │       │   └── Mat_bang_tang_dien_hinh.png
+    │       └── _Layouts/                     <-- Thiết kế chi tiết theo từng loại căn
+    │           ├── Studio/
+    │           ├── 1PN/
+    │           ├── 1PN_Plus/
+    │           ├── 2PN/
+    │           └── 3PN/
+    └── Thap_tang/
+        └── Ten_du_an/ (VD: VINHOMES GREEN PARADISE, VINHOMES HẢI VÂN BAY)
             ├── _Project/
             │   └── project_avatar.jpg
-            ├── _Layouts/
-            │   └── layout_01.png
-            └── BS15.2201/
+            ├── _FloorPlans/
+            │   └── Mat_bang_tong_the.png
+            └── _Layouts/
+                ├── Lien_ke/
+                ├── Biet_thu_song_lap/
+                └── Biet_thu_don_lap/
 ```
 
-**Quy tắc phân loại:**
+**Quy tắc phân loại & Lưu trữ:**
 - Phân tầng chính xác theo nguồn: `HiSale` và `SalePro`.
 - Phân khúc dữ liệu thực tế: `Thap_tang` và `Cao_tang` (dựa trên loại căn, tầng, tòa, project type).
-- Tạo thư mục theo nhu cầu thực tế (*on-demand*): Chỉ khởi tạo khi có dữ liệu căn thuộc nhóm đó, tránh tạo thư mục rỗng.
-- Mỗi dự án và từng căn hộ đều có thư mục riêng biệt kèm tên chuẩn hóa chống lỗi ký tự đặc biệt.
+- Tạo thư mục theo nhu cầu thực tế (*on-demand*): Chỉ khởi tạo khi có dữ liệu thuộc nhóm đó, tuyệt đối không tạo thư mục rỗng.
+- Căn SalePro không có ảnh riêng thực tế: Không tạo thư mục rỗng cho từng căn; các căn cùng dự án sẽ liên kết trực tiếp tới URL Drive của ảnh phối cảnh, mặt bằng và layout thiết kế tương ứng.
 
 ---
 
@@ -252,9 +265,9 @@ Lệnh sẽ kiểm tra quyền truy cập Thư mục tổng, tạo thử thư m�
 
 ---
 
-## 📊 Cấu trúc 24 cột trong File Excel Báo cáo
+## 📊 Cấu trúc 26 cột trong File Excel Báo cáo (Chuẩn V3)
 
-File Excel đính kèm được tạo tự động trong bộ nhớ với đầy đủ 24 cột:
+File Excel đính kèm được tạo tự động trong bộ nhớ với đầy đủ 26 cột:
 
 1. **STT**
 2. **Nguồn** (`HISALE` / `SALEPRO`)
@@ -274,12 +287,14 @@ File Excel đính kèm được tạo tự động trong bộ nhớ với đầy
 16. **Hỗ trợ ngân hàng**
 17. **Link quỹ căn / bảng giá**
 18. **Ngày ghi nhận**
-19. **Hình ảnh riêng của căn — Google Drive** *(Mới V2)*
-20. **Hình ảnh layout — Google Drive** *(Mới V2)*
-21. **Hình ảnh dự án — Google Drive** *(Mới V2)*
-22. **Thư mục hình ảnh của căn — Google Drive** *(Mới V2 - Có Hyperlink click mở ngay)*
-23. **Tài liệu liên quan** *(Mới V2)*
-24. **Trạng thái đồng bộ hình ảnh** (`SUCCESS`, `PARTIAL`, `NO_IMAGE`, `PENDING`...) *(Mới V2)*
+19. **Hình ảnh riêng của căn — Google Drive** *(Chỉ có khi căn thực sự có ảnh riêng)*
+20. **Hình ảnh layout thiết kế — Google Drive** *(Ghi rõ nhãn [Chính xác: ...] hoặc [Tham khảo: ...])*
+21. **Mức độ khớp layout** (`EXACT (Chính xác)`, `TYPE_MATCH (Tham khảo)`, `UNMATCHED (Chưa khớp)`)
+22. **Hình ảnh mặt bằng — Google Drive** *(Mặt bằng tổng thể, phân khu, tòa, tầng)*
+23. **Hình ảnh phối cảnh dự án — Google Drive** *(Ảnh đại diện và banners tiêu biểu của dự án)*
+24. **Thư mục Google Drive** *(Hyperlink click mở trực tiếp thư mục dự án / căn)*
+25. **Tài liệu liên quan** *(Bảng giá, CSBH, Pháp lý bóc tách từ landing/share info)*
+26. **Trạng thái đồng bộ hình ảnh** (`SUCCESS`, `NO_IMAGE`, `FAILED`, `PENDING`)
 
 ---
 
@@ -294,10 +309,10 @@ npm run crawl:now         # Quét toàn bộ rổ hàng ngay lập tức và g�
 npm run crawl:init        # Khởi tạo dữ liệu ban đầu (lưu rổ hàng, không gửi mail rác)
 npm run crawl:hisale      # Khởi tạo dữ liệu riêng cho sàn HiSale
 npm run crawl:salepro     # Khởi tạo dữ liệu riêng cho sàn SalePro
-npm run report:now        # Gửi ngay báo cáo tổng hợp ngày kèm file Excel 24 cột
+npm run report:now        # Gửi ngay báo cáo tổng hợp ngày kèm file Excel 26 cột
 
 # ==========================================
-# GOOGLE DRIVE & MEDIA
+# GOOGLE DRIVE & MEDIA (V3)
 # ==========================================
 npm run drive:auth        # Hướng dẫn và xác thực Google Drive OAuth lần đầu
 npm run drive:create-root # Tự động tạo thư mục tổng qua API & tự cập nhật ID vào .env
@@ -306,17 +321,21 @@ npm run drive:test        # Kiểm tra kết nối thư mục tổng và upload 
 npm run images:stats      # Thống kê trạng thái ảnh từ MongoDB (Chế độ chỉ đọc, không upload)
 npm run images:sync -- --source=hisale --limit=5   # Đồng bộ thử nghiệm tối đa 5 căn HiSale
 npm run images:sync -- --source=salepro --limit=5  # Xử lý thử nghiệm tối đa 5 căn SalePro
-npm run images:sync-projects -- --source=salepro --limit=5 # Đồng bộ media 5 dự án SalePro (_Project, _Layouts)
+
+# Đồng bộ Media dự án SalePro V3 (_Project, _FloorPlans, _Layouts và liên kết căn)
+npm run images:sync-projects -- --project-id=1295,1341,1475,1355,1385,1277 # Chỉ định ID dự án
+npm run images:sync-projects -- --source=salepro --limit=5                   # Theo số lượng
+
 npm run images:backfill -- --source=hisale         # Đồng bộ tồn đọng HiSale theo batch (hỗ trợ resume)
 npm run images:backfill -- --source=salepro        # Đồng bộ tồn đọng SalePro theo batch (hỗ trợ resume)
 
 # ==========================================
-# BÁO CÁO TUẦN (WEEKLY REPORT)
+# BÁO CÁO TUẦN (WEEKLY REPORT) & KIỂM THỬ
 # ==========================================
 npm run report:weekly     # Tổng hợp và gửi báo cáo tuần ngay lập tức
 npm run test:mail:weekly  # Kiểm thử giao diện email báo cáo tuần bằng dữ liệu mẫu
 npm run test:mail         # Kiểm thử email báo cáo ngày mẫu
-npm test                  # Chạy bộ test tự động toàn diện V2 (node test/verifyV2.js)
+npm test                  # Chạy bộ test tự động toàn diện (node test/verifyV2.js)
 ```
 
 ---

@@ -19,7 +19,7 @@ async function buildExcelReport(units = [], options = {}) {
     properties: { tabColor: { argb: 'FF1E3A8A' } },
   });
 
-  // Định nghĩa đầy đủ 24 cột chuẩn
+  // Định nghĩa đầy đủ các cột chuẩn V3 (18 cột truyền thống + 8 cột Google Drive & Media)
   sheet.columns = [
     // 18 cột truyền thống (Giữ nguyên thứ tự và cấu trúc)
     { header: 'STT', key: 'index', width: 8 },
@@ -41,12 +41,14 @@ async function buildExcelReport(units = [], options = {}) {
     { header: 'Link quỹ căn / bảng giá', key: 'price_list_url', width: 45 },
     { header: 'Ngày ghi nhận', key: 'created_at', width: 22 },
 
-    // 6 cột nâng cấp Google Drive & Media V2 (Cột 19 -> 24)
+    // 8 cột nâng cấp Google Drive & Media V3 (Cột 19 -> 26)
     { header: 'Hình ảnh riêng của căn — Google Drive', key: 'drive_image_urls', width: 42 },
-    { header: 'Hình ảnh layout — Google Drive', key: 'drive_layout_image_urls', width: 42 },
-    { header: 'Hình ảnh dự án — Google Drive', key: 'drive_project_image_urls', width: 42 },
-    { header: 'Thư mục hình ảnh của căn — Google Drive', key: 'drive_folder_url', width: 42 },
-    { header: 'Tài liệu liên quan', key: 'document_urls', width: 35 },
+    { header: 'Hình ảnh layout thiết kế — Google Drive', key: 'drive_layout_image_urls', width: 45 },
+    { header: 'Mức độ khớp layout', key: 'layout_match_level', width: 24 },
+    { header: 'Hình ảnh mặt bằng — Google Drive', key: 'drive_floor_plan_urls', width: 42 },
+    { header: 'Hình ảnh phối cảnh dự án — Google Drive', key: 'drive_project_image_urls', width: 42 },
+    { header: 'Thư mục Google Drive', key: 'drive_folder_url', width: 42 },
+    { header: 'Tài liệu liên quan', key: 'document_urls', width: 38 },
     { header: 'Trạng thái đồng bộ hình ảnh', key: 'image_sync_status', width: 22 },
   ];
 
@@ -61,14 +63,41 @@ async function buildExcelReport(units = [], options = {}) {
     };
 
     const driveUnitImages = formatUrls(unit.drive_image_urls);
-    const driveLayoutImages = formatUrls(unit.drive_layout_image_urls);
+    const rawLayoutUrls = formatUrls(unit.drive_layout_image_urls);
+
+    // Ghi rõ nhãn layout tham khảo hoặc chính xác
+    let driveLayoutDisplay = '';
+    if (rawLayoutUrls) {
+      if (unit.layout_match_level === 'TYPE_MATCH') {
+        const layoutTag = unit.layout_name ? `[Tham khảo: ${unit.layout_name}]` : '[Layout tham khảo]';
+        driveLayoutDisplay = `${layoutTag}\n${rawLayoutUrls}`;
+      } else if (unit.layout_match_level === 'EXACT') {
+        const layoutTag = unit.layout_name ? `[Chính xác: ${unit.layout_name}]` : '[Layout chính xác]';
+        driveLayoutDisplay = `${layoutTag}\n${rawLayoutUrls}`;
+      } else {
+        driveLayoutDisplay = rawLayoutUrls;
+      }
+    }
+
+    // Hiển thị mức độ khớp layout
+    let layoutMatchText = 'N/A';
+    if (unit.layout_match_level === 'EXACT') {
+      layoutMatchText = 'EXACT (Chính xác)';
+    } else if (unit.layout_match_level === 'TYPE_MATCH') {
+      layoutMatchText = 'TYPE_MATCH (Tham khảo)';
+    } else if (unit.layout_match_level === 'UNMATCHED') {
+      layoutMatchText = 'UNMATCHED (Chưa khớp)';
+    }
+
+    const driveFloorPlans = formatUrls(unit.drive_floor_plan_urls);
     const driveProjectImages = formatUrls(unit.drive_project_image_urls);
     const documents = formatUrls(unit.document_urls);
 
     // Hyperlink cho thư mục Google Drive (nếu có)
     let folderCellVal = '';
-    if (unit.drive_folder_url && String(unit.drive_folder_url).trim()) {
-      const url = String(unit.drive_folder_url).trim();
+    const folderUrl = unit.drive_folder_url || unit.drive_project_folder_url;
+    if (folderUrl && String(folderUrl).trim()) {
+      const url = String(folderUrl).trim();
       folderCellVal = {
         text: url,
         hyperlink: url,
@@ -96,9 +125,11 @@ async function buildExcelReport(units = [], options = {}) {
       price_list_url: unit.price_list_url || '',
       created_at: unit.created_at ? new Date(unit.created_at) : new Date(),
 
-      // V2 fields
+      // V3 fields
       drive_image_urls: driveUnitImages,
-      drive_layout_image_urls: driveLayoutImages,
+      drive_layout_image_urls: driveLayoutDisplay,
+      layout_match_level: layoutMatchText,
+      drive_floor_plan_urls: driveFloorPlans,
       drive_project_image_urls: driveProjectImages,
       drive_folder_url: folderCellVal,
       document_urls: documents,
@@ -108,6 +139,8 @@ async function buildExcelReport(units = [], options = {}) {
     // Cấu hình wrapText cho các cột URL nhiều dòng
     row.getCell('drive_image_urls').alignment = { wrapText: true, vertical: 'top' };
     row.getCell('drive_layout_image_urls').alignment = { wrapText: true, vertical: 'top' };
+    row.getCell('layout_match_level').alignment = { horizontal: 'center', vertical: 'top' };
+    row.getCell('drive_floor_plan_urls').alignment = { wrapText: true, vertical: 'top' };
     row.getCell('drive_project_image_urls').alignment = { wrapText: true, vertical: 'top' };
     row.getCell('drive_folder_url').alignment = { wrapText: false, vertical: 'top' };
     row.getCell('document_urls').alignment = { wrapText: true, vertical: 'top' };
@@ -140,9 +173,9 @@ async function buildExcelReport(units = [], options = {}) {
   sheet.getColumn('direction').alignment = { horizontal: 'center', vertical: 'top' };
   sheet.getColumn('status').alignment = { horizontal: 'center', vertical: 'top' };
 
-  // Khóa dòng đầu tiên (freeze header) & bật AutoFilter từ cột A đến cột X (24 cột)
+  // Khóa dòng đầu tiên (freeze header) & bật AutoFilter từ cột A đến cột Z (26 cột)
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
-  sheet.autoFilter = { from: 'A1', to: 'X1' };
+  sheet.autoFilter = { from: 'A1', to: 'Z1' };
 
   return workbook.xlsx.writeBuffer();
 }

@@ -68,7 +68,7 @@ const projectSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
-  // Google Drive & Image Storage V2 fields
+  // Google Drive & Image Storage V2 & V3 fields
   drive_folder_id: {
     type: String,
     default: ''
@@ -85,6 +85,14 @@ const projectSchema = new mongoose.Schema({
     type: [String],
     default: []
   },
+  floor_plan_urls: {
+    type: [String],
+    default: []
+  },
+  drive_floor_plan_urls: {
+    type: [String],
+    default: []
+  },
   layout_image_urls: {
     type: [String],
     default: []
@@ -95,6 +103,46 @@ const projectSchema = new mongoose.Schema({
   },
   document_urls: {
     type: [String],
+    default: []
+  },
+  // Chi tiết các loại mặt bằng & layout
+  floor_plans: {
+    type: [
+      {
+        floorplan_name: { type: String, default: '' },
+        image_url: { type: String, default: '' },
+        drive_url: { type: String, default: '' },
+        sha256: { type: String, default: '' }
+      }
+    ],
+    default: []
+  },
+  product_layouts: {
+    type: [
+      {
+        product_name: { type: String, default: '' },
+        category: { type: String, default: '' }, // e.g. Studio, 1PN, 1PN_Plus, 2PN, Lien_ke...
+        features: { type: String, default: '' },
+        image_url: { type: String, default: '' },
+        drive_url: { type: String, default: '' },
+        sha256: { type: String, default: '' }
+      }
+    ],
+    default: []
+  },
+  documents_classified: {
+    type: [
+      {
+        title: { type: String, default: '' },
+        category: {
+          type: String,
+          enum: ['BANG_GIA', 'CSBH', 'LAYOUT', 'PHAP_LY', 'BIEU_MAU', 'OTHER'],
+          default: 'OTHER'
+        },
+        source_url: { type: String, default: '' },
+        target_url: { type: String, default: '' }
+      }
+    ],
     default: []
   },
   stored_images: {
@@ -110,7 +158,7 @@ const projectSchema = new mongoose.Schema({
         last_modified: { type: String, default: '' },
         image_type: {
           type: String,
-          enum: ['_PROJECT', '_LAYOUT'],
+          enum: ['_PROJECT', '_LAYOUT', '_FLOOR_PLAN'],
           default: '_PROJECT'
         },
         uploaded_at: { type: Date, default: Date.now }

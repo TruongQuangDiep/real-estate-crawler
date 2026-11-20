@@ -95,13 +95,35 @@ const unitSchema = new mongoose.Schema(
       type: [String], // URL ảnh dự án đã đồng bộ trên Google Drive
       default: []
     },
+    floor_plan_urls: {
+      type: [String], // URL ảnh mặt bằng tổng thể / tầng
+      default: []
+    },
+    drive_floor_plan_urls: {
+      type: [String], // URL ảnh mặt bằng đã đồng bộ trên Google Drive
+      default: []
+    },
     layout_image_urls: {
-      type: [String], // URL ảnh layout mặt bằng
+      type: [String], // URL ảnh layout mặt bằng thiết kế loại căn
       default: []
     },
     drive_layout_image_urls: {
       type: [String], // URL ảnh layout mặt bằng trên Google Drive
       default: []
+    },
+    layout_match_level: {
+      type: String, // 'EXACT' | 'TYPE_MATCH' | 'UNMATCHED' | 'NONE'
+      enum: ['EXACT', 'TYPE_MATCH', 'UNMATCHED', 'NONE'],
+      default: 'NONE'
+    },
+    layout_name: {
+      type: String, // Tên loại layout (ví dụ: 'Căn hộ 2PN (Tham khảo)')
+      default: ''
+    },
+    shared_media_status: {
+      type: String, // Trạng thái đồng bộ media dùng chung
+      enum: ['PENDING', 'SYNCED', 'NONE'],
+      default: 'NONE'
     },
     document_urls: {
       type: [String], // Tài liệu liên quan (PDF, brochure...)
@@ -128,7 +150,7 @@ const unitSchema = new mongoose.Schema(
           last_modified: { type: String, default: '' },
           image_type: {
             type: String,
-            enum: ['UNIT', '_PROJECT', '_LAYOUT'],
+            enum: ['UNIT', '_PROJECT', '_LAYOUT', '_FLOOR_PLAN'],
             default: 'UNIT'
           },
           uploaded_at: { type: Date, default: Date.now }
