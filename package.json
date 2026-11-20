@@ -16,7 +16,10 @@
     "drive:create-root": "node src/scripts/createRootFolder.js",
     "drive:picker": "node src/scripts/grantFolderPicker.js",
     "drive:test": "node src/scripts/testDrive.js",
+    "images:stats": "node src/scripts/imageStats.js",
     "images:sync": "node src/scripts/syncImages.js",
+    "images:sync-projects": "node src/scripts/syncProjects.js",
+    "images:backfill": "node src/scripts/backfillImages.js",
     "report:weekly": "node src/scripts/weeklyReport.js --send",
     "test:mail:weekly": "node src/scripts/weeklyReport.js --test",
     "test": "node test/verifyV2.js"

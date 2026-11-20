@@ -303,8 +303,12 @@ npm run drive:auth        # Hướng dẫn và xác thực Google Drive OAuth l�
 npm run drive:create-root # Tự động tạo thư mục tổng qua API & tự cập nhật ID vào .env
 npm run drive:picker      # Cấp quyền thư mục công ty có sẵn qua giao diện Google Picker
 npm run drive:test        # Kiểm tra kết nối thư mục tổng và upload thử file
-npm run images:sync       # Đồng bộ một batch ảnh đang chờ xử lý
-npm run images:sync -- 5  # Đồng bộ thử nghiệm tối đa 5 căn
+npm run images:stats      # Thống kê trạng thái ảnh từ MongoDB (Chế độ chỉ đọc, không upload)
+npm run images:sync -- --source=hisale --limit=5   # Đồng bộ thử nghiệm tối đa 5 căn HiSale
+npm run images:sync -- --source=salepro --limit=5  # Xử lý thử nghiệm tối đa 5 căn SalePro
+npm run images:sync-projects -- --source=salepro --limit=5 # Đồng bộ media 5 dự án SalePro (_Project, _Layouts)
+npm run images:backfill -- --source=hisale         # Đồng bộ tồn đọng HiSale theo batch (hỗ trợ resume)
+npm run images:backfill -- --source=salepro        # Đồng bộ tồn đọng SalePro theo batch (hỗ trợ resume)
 
 # ==========================================
 # BÁO CÁO TUẦN (WEEKLY REPORT)

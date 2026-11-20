@@ -21,4 +21,13 @@ async function connectDB() {
   }
 }
 
-module.exports = { connectDB };
+async function disconnectDB() {
+  try {
+    await mongoose.disconnect();
+    console.log('[MongoDB] Đã ngắt kết nối an toàn');
+  } catch (error) {
+    console.error('[MongoDB] Lỗi ngắt kết nối:', error.message);
+  }
+}
+
+module.exports = { connectDB, disconnectDB };

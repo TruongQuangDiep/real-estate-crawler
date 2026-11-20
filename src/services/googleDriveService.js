@@ -5,6 +5,27 @@ const { google } = require('googleapis');
 
 // Cache bộ nhớ lưu các thư mục đã tìm/tạo để tránh spam API queries lên Google Drive
 const folderCache = new Map();
+// In-flight promises để ngăn chặn race condition khi nhiều luồng cùng tạo 1 thư mục đồng thời
+const folderCreationPromises = new Map();
+
+/**
+ * Chuẩn hóa tên thư mục/tập tin Google Drive:
+ * - Chuẩn hóa unicode NFC
+ * - Loại bỏ ký tự cấm: / \ ? % * : | " < > và ký tự điều khiển
+ * - Thu gọn khoảng trắng liên tiếp
+ * - Cắt ngắn tối đa 120 ký tự
+ */
+function sanitizeDriveName(name) {
+  if (!name || typeof name !== 'string') return 'Unnamed';
+  const clean = name
+    .normalize('NFC')
+    .replace(/[/\\?%*:|"<>]/g, '_')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1F\x7F]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.slice(0, 120) || 'Unnamed';
+}
 
 /**
  * Kiểm tra xem dịch vụ Google Drive có được bật và sẵn sàng hoạt động hay không.
@@ -28,7 +49,6 @@ function isDriveConfigured() {
     return { enabled: false, reason: `Không tìm thấy file token tại: ${tokenPath}. Cần chạy: npm run drive:auth` };
   }
 
-  // Kiểm tra nội dung token.json để tránh lỗi invalid_grant khi file vẫn chứa placeholder "xxxx"
   try {
     const tokenRaw = fs.readFileSync(tokenPath, 'utf8');
     const token = JSON.parse(tokenRaw);
@@ -97,65 +117,132 @@ function getDriveClient() {
 }
 
 /**
- * Tìm hoặc tạo một thư mục con dưới parentFolderId
+ * Thực thi hàm gọi Drive API có retry khi gặp lỗi 429 hoặc 5xx
+ */
+async function callWithRetry(apiFn, maxRetries = 3) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      return await apiFn();
+    } catch (err) {
+      attempt++;
+      const status = err.status || (err.response && err.response.status) || err.code;
+      const isRetryable = status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+      if (attempt >= maxRetries || !isRetryable) {
+        throw err;
+      }
+      const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+      await new Promise((res) => setTimeout(res, delay));
+    }
+  }
+}
+
+/**
+ * Kiểm tra xem một Folder hoặc File ID trên Drive còn tồn tại và không bị xóa vào thùng rác hay không.
+ * @param {string} fileId
+ * @returns {Promise<boolean>}
+ */
+async function verifyDriveItemExists(fileId) {
+  if (!fileId || typeof fileId !== 'string') return false;
+  try {
+    const drive = getDriveClient();
+    const res = await callWithRetry(() =>
+      drive.files.get({
+        fileId: fileId.trim(),
+        fields: 'id, trashed, name',
+      })
+    );
+    return Boolean(res.data && !res.data.trashed);
+  } catch (err) {
+    const status = err.status || (err.response && err.response.status) || err.code;
+    if (status === 404 || status === '404') {
+      return false;
+    }
+    // Nếu lỗi mạng tạm thời thì không vội phán đoán là đã xóa
+    return true;
+  }
+}
+
+/**
+ * Tìm hoặc tạo một thư mục con dưới parentFolderId (chống race-condition với Promise Mutex)
  * @param {string} folderName - Tên thư mục cần tìm/tạo
  * @param {string} parentFolderId - ID thư mục cha
  * @returns {Promise<{ id: string, name: string, webViewLink: string }>}
  */
 async function ensureFolder(folderName, parentFolderId) {
-  const cleanName = String(folderName || '').trim().replace(/[/\\?%*:|"<>]/g, '_');
+  const cleanName = sanitizeDriveName(folderName);
   const cacheKey = `${parentFolderId}::${cleanName}`;
+
   if (folderCache.has(cacheKey)) {
     return folderCache.get(cacheKey);
   }
 
-  const drive = getDriveClient();
-
-  // 1. Tìm thư mục đã tồn tại chưa
-  const query = `'${parentFolderId}' in parents and name = '${cleanName.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-  const res = await drive.files.list({
-    q: query,
-    fields: 'files(id, name, webViewLink)',
-    spaces: 'drive',
-    pageSize: 1,
-  });
-
-  if (res.data.files && res.data.files.length > 0) {
-    const existing = res.data.files[0];
-    const result = {
-      id: existing.id,
-      name: existing.name,
-      webViewLink: existing.webViewLink || `https://drive.google.com/drive/folders/${existing.id}`,
-    };
-    folderCache.set(cacheKey, result);
-    return result;
+  // Nếu đang có một luồng khác tạo đúng thư mục này, cùng đợi Promise đó hoàn thành
+  if (folderCreationPromises.has(cacheKey)) {
+    return folderCreationPromises.get(cacheKey);
   }
 
-  // 2. Tạo thư mục mới nếu chưa có
-  const createRes = await drive.files.create({
-    requestBody: {
-      name: cleanName,
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: [parentFolderId],
-    },
-    fields: 'id, name, webViewLink',
-  });
+  const creationPromise = (async () => {
+    const drive = getDriveClient();
 
-  const created = {
-    id: createRes.data.id,
-    name: createRes.data.name,
-    webViewLink: createRes.data.webViewLink || `https://drive.google.com/drive/folders/${createRes.data.id}`,
-  };
+    // 1. Tìm thư mục đã tồn tại dưới parentFolderId chưa
+    const query = `'${parentFolderId}' in parents and name = '${cleanName.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+    const res = await callWithRetry(() =>
+      drive.files.list({
+        q: query,
+        fields: 'files(id, name, webViewLink)',
+        spaces: 'drive',
+        pageSize: 1,
+      })
+    );
 
-  folderCache.set(cacheKey, created);
-  return created;
+    if (res.data.files && res.data.files.length > 0) {
+      const existing = res.data.files[0];
+      const result = {
+        id: existing.id,
+        name: existing.name,
+        webViewLink: existing.webViewLink || `https://drive.google.com/drive/folders/${existing.id}`,
+      };
+      folderCache.set(cacheKey, result);
+      return result;
+    }
+
+    // 2. Tạo thư mục mới nếu chưa có
+    const createRes = await callWithRetry(() =>
+      drive.files.create({
+        requestBody: {
+          name: cleanName,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [parentFolderId],
+        },
+        fields: 'id, name, webViewLink',
+      })
+    );
+
+    const created = {
+      id: createRes.data.id,
+      name: createRes.data.name,
+      webViewLink: createRes.data.webViewLink || `https://drive.google.com/drive/folders/${createRes.data.id}`,
+    };
+
+    folderCache.set(cacheKey, created);
+    return created;
+  })();
+
+  folderCreationPromises.set(cacheKey, creationPromise);
+
+  try {
+    return await creationPromise;
+  } finally {
+    folderCreationPromises.delete(cacheKey);
+  }
 }
 
 /**
  * Tạo cây thư mục lồng nhau theo mảng các phân đoạn đường dẫn.
- * Ví dụ: ['HiSale', 'VINHOMES GREEN PARADISE', 'ND11-58']
+ * Ví dụ: ['HiSale', 'Cao_tang', 'THE CITYON', 'A2.1009']
  * @param {Array<string>} pathSegments - Mảng các tên thư mục theo thứ tự
- * @param {string} [rootFolderId] - ID thư mục gốc (nếu không truyền sẽ lấy từ GOOGLE_DRIVE_ROOT_FOLDER_ID)
+ * @param {string} [rootFolderId] - ID thư mục gốc
  * @returns {Promise<{ id: string, webViewLink: string, path: string }>}
  */
 async function ensureFolderPath(pathSegments = [], rootFolderId = null) {
@@ -193,24 +280,26 @@ async function ensureFolderPath(pathSegments = [], rootFolderId = null) {
  */
 async function uploadFile({ name, buffer, mimeType, parentFolderId, description = '' }) {
   const drive = getDriveClient();
-  const cleanName = String(name || 'image.jpg').trim().replace(/[/\\?%*:|"<>]/g, '_');
+  const cleanName = sanitizeDriveName(name || 'image.jpg');
 
   const stream = new Readable();
   stream.push(buffer);
   stream.push(null);
 
-  const res = await drive.files.create({
-    requestBody: {
-      name: cleanName,
-      parents: [parentFolderId],
-      description,
-    },
-    media: {
-      mimeType: mimeType || 'image/jpeg',
-      body: stream,
-    },
-    fields: 'id, name, mimeType, size, webViewLink, webContentLink',
-  });
+  const res = await callWithRetry(() =>
+    drive.files.create({
+      requestBody: {
+        name: cleanName,
+        parents: [parentFolderId],
+        description,
+      },
+      media: {
+        mimeType: mimeType || 'image/jpeg',
+        body: stream,
+      },
+      fields: 'id, name, mimeType, size, webViewLink, webContentLink',
+    })
+  );
 
   const file = res.data;
   return {
@@ -228,18 +317,20 @@ async function uploadFile({ name, buffer, mimeType, parentFolderId, description 
  * @param {string} folderName - Tên thư mục tổng
  * @returns {Promise<{ id: string, name: string, webViewLink: string }>}
  */
-async function createRootFolder(folderName = 'Real_Estate_Crawler_V2') {
+async function createRootFolder(folderName = 'Real_Estate_Crawler_Test') {
   const drive = getDriveClient();
-  const cleanName = String(folderName || 'Real_Estate_Crawler_V2').trim();
+  const cleanName = sanitizeDriveName(folderName || 'Real_Estate_Crawler_Test');
 
-  const res = await drive.files.create({
-    requestBody: {
-      name: cleanName,
-      mimeType: 'application/vnd.google-apps.folder',
-      description: 'Thư mục tổng lưu trữ rổ hàng Bất động sản tạo tự động bởi Crawler Bot',
-    },
-    fields: 'id, name, webViewLink',
-  });
+  const res = await callWithRetry(() =>
+    drive.files.create({
+      requestBody: {
+        name: cleanName,
+        mimeType: 'application/vnd.google-apps.folder',
+        description: 'Thư mục tổng lưu trữ rổ hàng Bất động sản tạo tự động bởi Crawler Bot',
+      },
+      fields: 'id, name, webViewLink',
+    })
+  );
 
   return {
     id: res.data.id,
@@ -253,12 +344,15 @@ async function createRootFolder(folderName = 'Real_Estate_Crawler_V2') {
  */
 function clearFolderCache() {
   folderCache.clear();
+  folderCreationPromises.clear();
 }
 
 module.exports = {
   isDriveConfigured,
   getOAuth2Client,
   getDriveClient,
+  verifyDriveItemExists,
+  sanitizeDriveName,
   ensureFolder,
   ensureFolderPath,
   createRootFolder,

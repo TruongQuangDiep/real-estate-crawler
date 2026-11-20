@@ -106,6 +106,8 @@ const projectSchema = new mongoose.Schema({
         sha256: { type: String, default: '' },
         mime_type: { type: String, default: '' },
         file_size: { type: Number, default: 0 },
+        etag: { type: String, default: '' },
+        last_modified: { type: String, default: '' },
         image_type: {
           type: String,
           enum: ['_PROJECT', '_LAYOUT'],
@@ -119,7 +121,20 @@ const projectSchema = new mongoose.Schema({
   image_sync_status: {
     type: String,
     enum: ['PENDING', 'PROCESSING', 'SUCCESS', 'PARTIAL', 'FAILED', 'NO_IMAGE'],
-    default: 'PENDING'
+    default: 'PENDING',
+    index: true
+  },
+  image_sync_locked_until: {
+    type: Date,
+    default: null
+  },
+  image_sync_retries: {
+    type: Number,
+    default: 0
+  },
+  image_sync_error: {
+    type: String,
+    default: ''
   },
   image_synced_at: {
     type: Date,

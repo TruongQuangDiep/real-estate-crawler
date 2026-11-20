@@ -124,6 +124,8 @@ const unitSchema = new mongoose.Schema(
           sha256: { type: String, default: '' },
           mime_type: { type: String, default: '' },
           file_size: { type: Number, default: 0 },
+          etag: { type: String, default: '' },
+          last_modified: { type: String, default: '' },
           image_type: {
             type: String,
             enum: ['UNIT', '_PROJECT', '_LAYOUT'],
@@ -139,6 +141,19 @@ const unitSchema = new mongoose.Schema(
       enum: ['PENDING', 'PROCESSING', 'SUCCESS', 'PARTIAL', 'FAILED', 'NO_IMAGE'],
       default: 'PENDING',
       index: true
+    },
+    image_sync_locked_until: {
+      type: Date,
+      default: null,
+      index: true
+    },
+    image_sync_retries: {
+      type: Number,
+      default: 0
+    },
+    image_sync_error: {
+      type: String,
+      default: ''
     },
     image_synced_at: {
       type: Date,
