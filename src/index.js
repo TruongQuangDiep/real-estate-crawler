@@ -10,6 +10,7 @@ const CrawlLog = require('./models/CrawlLog');
 const ReportLog = require('./models/ReportLog');
 const { sendWeeklyReport } = require('./services/weeklyReportService');
 const { syncPendingImages, syncPendingProjectMedia } = require('./services/imageStorageService');
+const { withLock } = require('./services/lockService');
 
 let isRunning = false;
 let lastReportSentDate = null;
@@ -394,13 +395,25 @@ async function main() {
       );
     }
 
-    // 5. Lịch tự động đồng bộ Media dự án SalePro V3
+    // 5. Lịch tự động đồng bộ Media dự án SalePro V3 (Khóa chống chạy đồng thời với CLI)
     if (projectMediaSyncEnabled && projectMediaSyncSchedule) {
       cron.schedule(
         projectMediaSyncSchedule,
         async () => {
           console.log(`\n[Cron ProjectMedia] 📁 Bắt đầu tự động cập nhật media cấp dự án SalePro V3...`);
-          await syncPendingProjectMedia({ limit: projectMediaBatchSize });
+          await withLock(
+            'PROJECT_MEDIA_SYNC',
+            async (leaseId) => {
+              console.log(`[Cron ProjectMedia] 🔒 Đã nhận khóa phân tán (lease: ${leaseId}). Đang xử lý...`);
+              await syncPendingProjectMedia({ limit: projectMediaBatchSize });
+            },
+            {
+              holder: `CRON_PID_${process.pid}`,
+              ttlMs: 25 * 60 * 1000,
+              maxRetries: 1,
+              retryDelayMs: 5000,
+            }
+          );
         },
         { timezone }
       );

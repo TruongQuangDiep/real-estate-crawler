@@ -24,14 +24,18 @@ Hệ thống backend tự động thu thập, chuẩn hóa, đối chiếu dữ 
 - **Bảo mật & Ổn định Hệ thống Chuyên sâu (Security & Concurrency)**:
   - Chống SSRF đa chặng: Kiểm tra hostname trước mọi bước chuyển hướng HTTP (`beforeRedirect`).
   - Kiểm tra chữ ký nhị phân (Magic Bytes) chống lưu nhầm các trang HTML/JSON lỗi vào Google Drive.
-  - Khóa nguyên tử (Atomic Locking) với `findOneAndUpdate` trạng thái `PROCESSING` ngăn chặn race condition khi chạy nhiều worker song song.
+  - **Hoàn thiện Atomic Locking với Lease ID**: Mỗi lần claim căn hộ hoặc dự án đều sinh `lease_id` (UUID) ngẫu nhiên. Mọi thao tác ghi kết quả đều sử dụng Conditional Update (`image_sync_lock_owner: leaseId` và `image_sync_locked_until > now`). Nếu khóa hết hạn hoặc bị worker khác chiếm quyền, worker cũ tự động bị từ chối ghi (`matchedCount = 0`), ngăn chặn triệt để race condition và ghi đè dữ liệu cũ.
+  - **Khóa phân tán Concurrency Lock Service (`SystemLock`)**: Ngăn chặn chạy đồng thời giữa tiến trình nền (`PROJECT_MEDIA_SYNC_CRON`) và lệnh thủ công CLI (`npm run images:sync-projects`). Cơ chế tự động thử lại (retry) với TTL expiration an toàn.
 - **Cấu hình Linh hoạt & Tiết kiệm Quota**:
   - Cấu hình số lượng ảnh phối cảnh dự án qua `IMAGE_MAX_PROJECT_IMAGES` (mặc định: `0` = lưu toàn bộ).
   - Tách biệt rõ ràng các trạng thái đồng bộ: `SUCCESS`, `PARTIAL`, `FAILED`, `NO_IMAGE`.
+  - **Chuẩn hóa `media_schema_version`**: CHỈ dự án đạt `SUCCESS` hoặc `NO_IMAGE` mới được gắn `media_schema_version = 3`. Các dự án `PARTIAL` hoặc `FAILED` được giữ version cũ để các phiên quét tiếp theo tự động phát hiện và retry đầy đủ.
   - Không bao giờ ghi đè media dự án thành mảng rỗng khi API đối tác gặp lỗi tạm thời.
+- **Rà soát & Di chuyển Phân khúc An toàn (Safe Segment Migration)**:
+  - Bổ sung lệnh rà soát phân khúc Google Drive hỗ trợ chế độ Dry-run an toàn 100% (`npm run drive:migrate-segments:dry`).
 - **Báo cáo Excel 26 cột & Bộ Kiểm thử Toàn diện**:
   - File Excel 26 cột chuẩn V3.1 với định dạng wrapText và Hyperlink mở Google Drive trực tiếp.
-  - Bộ kiểm thử tự động `node test/verifyV3.js` với 8 kịch bản kiểm thử độc lập đạt độ tin cậy 100%.
+  - Bộ kiểm thử tự động `node test/verifyV3.js` với 12 kịch bản kiểm thử độc lập đạt độ tin cậy 100%.
 
 ---
 
@@ -321,6 +325,8 @@ npm run drive:auth        # Hướng dẫn và xác thực Google Drive OAuth l�
 npm run drive:create-root # Tự động tạo thư mục tổng qua API & tự cập nhật ID vào .env
 npm run drive:picker      # Cấp quyền thư mục công ty có sẵn qua giao diện Google Picker
 npm run drive:test        # Kiểm tra kết nối thư mục tổng và upload thử file
+npm run drive:migrate-segments:dry      # Rà soát phân khúc Drive (Chế độ DRY-RUN, an toàn 100%)
+npm run drive:migrate-segments:execute  # Thực hiện di chuyển phân khúc thật (khi được phê duyệt)
 npm run images:stats      # Thống kê trạng thái ảnh từ MongoDB (Chế độ chỉ đọc, không upload)
 npm run images:sync -- --source=hisale --limit=5   # Đồng bộ thử nghiệm tối đa 5 căn HiSale
 npm run images:sync -- --source=salepro --limit=5  # Xử lý thử nghiệm tối đa 5 căn SalePro

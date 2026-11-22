@@ -818,6 +818,34 @@ async function syncSaleProProjectMedia(projectDoc) {
     driveFolderUrl: '',
   };
 
+  const projectLeaseId = crypto.randomUUID();
+  const lockTimeoutMs = 15 * 60 * 1000;
+
+  // Lấy khóa xử lý nguyên tử cấp dự án với lease ID (ngăn xung đột worker song song)
+  const lockedProj = await Project.findOneAndUpdate(
+    {
+      _id: projectDoc._id,
+      $or: [
+        { image_sync_status: { $ne: 'PROCESSING' } },
+        { image_sync_locked_until: { $lt: new Date() } },
+        { image_sync_locked_until: null },
+      ],
+    },
+    {
+      $set: {
+        image_sync_status: 'PROCESSING',
+        image_sync_locked_until: new Date(Date.now() + lockTimeoutMs),
+        image_sync_lock_owner: projectLeaseId,
+      },
+    },
+    { new: true }
+  );
+
+  if (!lockedProj) {
+    console.warn(`[SalePro V3] ℹ️ Dự án [${projectDoc.project_name}] đang được xử lý bởi worker khác.`);
+    return { status: 'LOCKED_BY_OTHER', projectId: projectDoc.project_id };
+  }
+
   try {
     // Đảm bảo thư mục chính của dự án trên Google Drive
     const projectFolder = await ensureFolderPath(['SalePro', segment, projectDoc.project_name]);
@@ -1094,18 +1122,59 @@ async function syncSaleProProjectMedia(projectDoc) {
 
     // Xác định trạng thái đồng bộ chính xác theo chuẩn V3.1
     let finalStatus = 'SUCCESS';
+    let finalError = '';
     if (stats.totalFetched === 0) {
       finalStatus = 'NO_IMAGE';
     } else if (stats.errorCount > 0) {
       finalStatus = stats.uploadedCount > 0 || stats.duplicateCount > 0 ? 'PARTIAL' : 'FAILED';
+      finalError = `Đồng bộ chưa trọn vẹn: ${stats.errorCount} file tải/upload thất bại`;
     } else {
       finalStatus = 'SUCCESS';
     }
 
-    projectDoc.image_sync_status = finalStatus;
-    projectDoc.media_schema_version = 3;
-    projectDoc.media_synced_at = new Date();
-    await projectDoc.save();
+    const updateFields = {
+      image_sync_status: finalStatus,
+      image_sync_error: finalError,
+      image_sync_locked_until: null,
+      image_sync_lock_owner: null,
+      drive_folder_id: projectDoc.drive_folder_id,
+      drive_folder_url: projectDoc.drive_folder_url,
+      project_image_urls: projectDoc.project_image_urls,
+      drive_project_image_urls: projectDoc.drive_project_image_urls,
+      floor_plans: projectDoc.floor_plans,
+      drive_floor_plan_urls: projectDoc.drive_floor_plan_urls,
+      product_layouts: projectDoc.product_layouts,
+      drive_layout_image_urls: projectDoc.drive_layout_image_urls,
+      documents_classified: projectDoc.documents_classified,
+      document_urls: projectDoc.document_urls,
+      stored_images: projectDoc.stored_images,
+    };
+
+    // QUAN TRỌNG (Yêu cầu 2): media_schema_version = 3 CHỈ được gán khi SUCCESS hoặc NO_IMAGE!
+    // Nếu PARTIAL hoặc FAILED -> giữ nguyên media_schema_version cũ (< 3) để các lần sync tiếp theo tự retry
+    if (finalStatus === 'SUCCESS' || finalStatus === 'NO_IMAGE') {
+      updateFields.media_schema_version = 3;
+      updateFields.media_synced_at = new Date();
+    }
+
+    // Conditional update: chỉ worker sở hữu khóa (projectLeaseId) và khóa còn hạn mới được ghi kết quả
+    const projectSaveRes = await Project.updateOne(
+      {
+        _id: projectDoc._id,
+        image_sync_lock_owner: projectLeaseId,
+        image_sync_locked_until: { $gt: new Date() },
+      },
+      {
+        $set: updateFields,
+      }
+    );
+
+    if (projectSaveRes.matchedCount === 0) {
+      console.warn(
+        `[SalePro V3] ⚠️ Khóa dự án ${projectDoc.project_name} (lease: ${projectLeaseId}) đã hết hạn hoặc bị worker khác chiếm. Hủy ghi kết quả.`
+      );
+      return { status: 'LOCK_EXPIRED', projectId: projectDoc.project_id };
+    }
 
     // ==========================================
     // 5. Lan tỏa và liên kết layout tới từng căn trong MongoDB
@@ -1174,9 +1243,17 @@ async function syncSaleProProjectMedia(projectDoc) {
     };
   } catch (err) {
     console.error(`[SalePro Media V3] ❌ Lỗi nghiêm trọng đồng bộ dự án ${projectDoc.project_name}:`, err.message);
-    projectDoc.image_sync_status = 'FAILED';
-    projectDoc.image_sync_error = err.message;
-    await projectDoc.save();
+    await Project.updateOne(
+      { _id: projectDoc._id, image_sync_lock_owner: projectLeaseId },
+      {
+        $set: {
+          image_sync_status: 'FAILED',
+          image_sync_error: err.message,
+          image_sync_locked_until: null,
+          image_sync_lock_owner: null,
+        },
+      }
+    ).catch(() => {});
     return { status: 'FAILED', error: err.message };
   }
 }
@@ -1184,34 +1261,86 @@ async function syncSaleProProjectMedia(projectDoc) {
 /**
  * Xử lý đồng bộ hình ảnh cho một bản ghi Unit cụ thể (HiSale hoặc SalePro căn riêng)
  */
-async function syncSingleUnit(unitDoc) {
+async function syncSingleUnit(unitDoc, leaseId = null) {
   const driveCheck = isDriveConfigured();
   if (!driveCheck.enabled) {
     return { status: 'SKIPPED_DRIVE_DISABLED', unit_code: unitDoc.unit_code };
   }
 
-  unitDoc.image_sync_status = 'PROCESSING';
-  unitDoc.image_sync_locked_until = new Date(Date.now() + LOCK_TIMEOUT_MS);
-  unitDoc.image_sync_retries = (unitDoc.image_sync_retries || 0) + 1;
-  await unitDoc.save();
+  const effectiveLeaseId = leaseId || unitDoc.image_sync_lock_owner || crypto.randomUUID();
+
+  // Đảm bảo document đã được khóa nguyên tử với leaseId (ngăn tranh chấp worker)
+  if (!unitDoc.image_sync_lock_owner || unitDoc.image_sync_lock_owner !== effectiveLeaseId) {
+    const lockedUnit = await Unit.findOneAndUpdate(
+      {
+        _id: unitDoc._id,
+        $or: [
+          { image_sync_status: { $ne: 'PROCESSING' } },
+          { image_sync_locked_until: { $lt: new Date() } },
+          { image_sync_locked_until: null },
+        ],
+      },
+      {
+        $set: {
+          image_sync_status: 'PROCESSING',
+          image_sync_locked_until: new Date(Date.now() + LOCK_TIMEOUT_MS),
+          image_sync_lock_owner: effectiveLeaseId,
+          $inc: { image_sync_retries: 1 },
+        },
+      },
+      { new: true }
+    );
+    if (!lockedUnit) {
+      console.warn(`[ImageSync] ℹ️ Căn ${unitDoc.unit_code} đang được xử lý bởi worker khác.`);
+      return { status: 'LOCKED_BY_OTHER', unit_code: unitDoc.unit_code };
+    }
+  }
 
   const sourceName = (unitDoc.source || 'hisale').toLowerCase() === 'hisale' ? 'HiSale' : 'SalePro';
   const urlsToSync = Array.isArray(unitDoc.image_urls) ? unitDoc.image_urls.filter(Boolean) : [];
 
   // Nếu là SalePro và căn không có ảnh riêng:
   if (sourceName === 'SalePro' && urlsToSync.length === 0) {
-    unitDoc.image_sync_status = 'NO_IMAGE';
-    unitDoc.image_sync_locked_until = null;
-    unitDoc.image_synced_at = new Date();
-    await unitDoc.save();
+    const noImgRes = await Unit.updateOne(
+      {
+        _id: unitDoc._id,
+        image_sync_lock_owner: effectiveLeaseId,
+        image_sync_locked_until: { $gt: new Date() },
+      },
+      {
+        $set: {
+          image_sync_status: 'NO_IMAGE',
+          image_sync_locked_until: null,
+          image_sync_lock_owner: null,
+          image_synced_at: new Date(),
+        },
+      }
+    );
+    if (noImgRes.matchedCount === 0) {
+      return { status: 'LOCK_EXPIRED', unit_code: unitDoc.unit_code };
+    }
     return { status: 'NO_IMAGE', unit_code: unitDoc.unit_code };
   }
 
   if (urlsToSync.length === 0) {
-    unitDoc.image_sync_status = 'NO_IMAGE';
-    unitDoc.image_sync_locked_until = null;
-    unitDoc.image_synced_at = new Date();
-    await unitDoc.save();
+    const noImgRes = await Unit.updateOne(
+      {
+        _id: unitDoc._id,
+        image_sync_lock_owner: effectiveLeaseId,
+        image_sync_locked_until: { $gt: new Date() },
+      },
+      {
+        $set: {
+          image_sync_status: 'NO_IMAGE',
+          image_sync_locked_until: null,
+          image_sync_lock_owner: null,
+          image_synced_at: new Date(),
+        },
+      }
+    );
+    if (noImgRes.matchedCount === 0) {
+      return { status: 'LOCK_EXPIRED', unit_code: unitDoc.unit_code };
+    }
     return { status: 'NO_IMAGE', unit_code: unitDoc.unit_code };
   }
 
@@ -1305,9 +1434,34 @@ async function syncSingleUnit(unitDoc) {
           unitDoc.drive_image_urls.push(uploaded.webViewLink);
         }
 
-        await unitDoc.save();
+        // Conditional intermediate update: chỉ ghi nếu worker vẫn nắm lease hợp lệ
+        const interUpdate = await Unit.updateOne(
+          {
+            _id: unitDoc._id,
+            image_sync_lock_owner: effectiveLeaseId,
+            image_sync_locked_until: { $gt: new Date() },
+          },
+          {
+            $set: {
+              stored_images: unitDoc.stored_images,
+              drive_image_urls: unitDoc.drive_image_urls,
+              drive_folder_id: unitDoc.drive_folder_id,
+              drive_folder_url: unitDoc.drive_folder_url,
+            },
+          }
+        );
+
+        if (interUpdate.matchedCount === 0) {
+          throw new Error(
+            `LOCK_LOST: Khóa căn ${unitDoc.unit_code} đã hết hạn hoặc bị worker khác chiếm (lease: ${effectiveLeaseId})`
+          );
+        }
+
         successCount++;
       } catch (uploadErr) {
+        if (uploadErr.message && uploadErr.message.startsWith('LOCK_LOST:')) {
+          throw uploadErr;
+        }
         failCount++;
         unitDoc.image_sync_error = uploadErr.message;
         console.warn(
@@ -1317,31 +1471,72 @@ async function syncSingleUnit(unitDoc) {
       }
     }
 
+    let finalStatus = 'SUCCESS';
     if (successCount === urlsToSync.length) {
-      unitDoc.image_sync_status = 'SUCCESS';
+      finalStatus = 'SUCCESS';
       unitDoc.image_sync_error = '';
     } else if (successCount > 0) {
-      unitDoc.image_sync_status = 'PARTIAL';
+      finalStatus = 'PARTIAL';
     } else {
-      unitDoc.image_sync_status = 'FAILED';
+      finalStatus = 'FAILED';
     }
 
-    unitDoc.image_sync_locked_until = null;
-    unitDoc.image_synced_at = new Date();
-    await unitDoc.save();
+    // Conditional final update: chỉ ghi nếu worker sở hữu lease hợp lệ
+    const finalUpdate = await Unit.updateOne(
+      {
+        _id: unitDoc._id,
+        image_sync_lock_owner: effectiveLeaseId,
+        image_sync_locked_until: { $gt: new Date() },
+      },
+      {
+        $set: {
+          image_sync_status: finalStatus,
+          image_sync_error: unitDoc.image_sync_error || '',
+          drive_folder_id: unitDoc.drive_folder_id,
+          drive_folder_url: unitDoc.drive_folder_url,
+          drive_image_urls: unitDoc.drive_image_urls,
+          stored_images: unitDoc.stored_images,
+          image_synced_at: new Date(),
+          image_sync_locked_until: null,
+          image_sync_lock_owner: null,
+        },
+      }
+    );
+
+    if (finalUpdate.matchedCount === 0) {
+      console.warn(
+        `[ImageSync] ⚠️ Lease (${effectiveLeaseId}) của căn ${unitDoc.unit_code} đã hết hạn. Hủy ghi kết quả để tránh race condition.`
+      );
+      return {
+        status: 'LOCK_EXPIRED',
+        unit_code: unitDoc.unit_code,
+        successCount,
+        failCount,
+      };
+    }
 
     return {
-      status: unitDoc.image_sync_status,
+      status: finalStatus,
       unit_code: unitDoc.unit_code,
       successCount,
       failCount,
     };
   } catch (err) {
-    unitDoc.image_sync_status = 'FAILED';
-    unitDoc.image_sync_error = err.message;
-    unitDoc.image_sync_locked_until = null;
-    unitDoc.image_synced_at = new Date();
-    await unitDoc.save();
+    if (err.message && err.message.startsWith('LOCK_LOST:')) {
+      console.warn(`[ImageSync] ⚠️ ${err.message}`);
+      return { status: 'LOCK_EXPIRED', unit_code: unitDoc.unit_code, error: err.message };
+    }
+    await Unit.updateOne(
+      { _id: unitDoc._id, image_sync_lock_owner: effectiveLeaseId },
+      {
+        $set: {
+          image_sync_status: 'FAILED',
+          image_sync_error: err.message,
+          image_sync_locked_until: null,
+          image_sync_lock_owner: null,
+        },
+      }
+    ).catch(() => {});
     return { status: 'FAILED', unit_code: unitDoc.unit_code, error: err.message };
   }
 }
@@ -1353,7 +1548,7 @@ async function processBatchWithConcurrency(units, concurrency = DEFAULT_CONCURRE
   const results = [];
   for (let i = 0; i < units.length; i += concurrency) {
     const chunk = units.slice(i, i + concurrency);
-    const chunkResults = await Promise.all(chunk.map((u) => syncSingleUnit(u)));
+    const chunkResults = await Promise.all(chunk.map((u) => syncSingleUnit(u, u._leaseId)));
     results.push(...chunkResults);
   }
   return results;
@@ -1436,26 +1631,30 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
       return { total: 0, success: 0 };
     }
 
-    // Khóa nguyên tử (Atomic locking) để ngăn tranh chấp giữa CLI và background Scheduler
+    // Khóa nguyên tử (Atomic locking) với lease ID để ngăn tranh chấp giữa CLI và background Scheduler
     const pendingUnits = [];
     for (const rawUnit of candidateUnits) {
+      const leaseId = crypto.randomUUID();
       const lockedUnit = await Unit.findOneAndUpdate(
         {
           _id: rawUnit._id,
           $or: [
             { image_sync_status: { $ne: 'PROCESSING' } },
             { image_sync_locked_until: { $lt: new Date() } },
+            { image_sync_locked_until: null },
           ],
         },
         {
           $set: {
             image_sync_status: 'PROCESSING',
             image_sync_locked_until: new Date(Date.now() + LOCK_TIMEOUT_MS),
+            image_sync_lock_owner: leaseId,
           },
         },
         { new: true }
       );
       if (lockedUnit) {
+        lockedUnit._leaseId = leaseId;
         pendingUnits.push(lockedUnit);
       }
     }

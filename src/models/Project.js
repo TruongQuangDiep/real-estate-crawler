@@ -174,7 +174,13 @@ const projectSchema = new mongoose.Schema({
   },
   image_sync_locked_until: {
     type: Date,
-    default: null
+    default: null,
+    index: true
+  },
+  image_sync_lock_owner: {
+    type: String, // Lease ID / Worker ID sở hữu khóa
+    default: null,
+    index: true
   },
   image_sync_retries: {
     type: Number,

@@ -169,6 +169,11 @@ const unitSchema = new mongoose.Schema(
       default: null,
       index: true
     },
+    image_sync_lock_owner: {
+      type: String, // Lease ID / Worker ID sở hữu khóa
+      default: null,
+      index: true
+    },
     image_sync_retries: {
       type: Number,
       default: 0
