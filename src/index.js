@@ -9,7 +9,7 @@ const { sendNotificationEmail, sendErrorAlert } = require('./mailer');
 const CrawlLog = require('./models/CrawlLog');
 const ReportLog = require('./models/ReportLog');
 const { sendWeeklyReport } = require('./services/weeklyReportService');
-const { syncPendingImages } = require('./services/imageStorageService');
+const { syncPendingImages, syncPendingProjectMedia } = require('./services/imageStorageService');
 
 let isRunning = false;
 let lastReportSentDate = null;
@@ -317,6 +317,9 @@ async function main() {
     const weeklySchedule = (process.env.WEEKLY_REPORT_CRON || '0 6 * * 1').trim();
     const imageSyncEnabled = process.env.IMAGE_SYNC_ENABLED === 'true';
     const imageSyncSchedule = (process.env.IMAGE_SYNC_CRON || '*/15 * * * *').trim();
+    const projectMediaSyncEnabled = process.env.PROJECT_MEDIA_SYNC_ENABLED === 'true';
+    const projectMediaSyncSchedule = (process.env.PROJECT_MEDIA_SYNC_CRON || '0 2 * * *').trim();
+    const projectMediaBatchSize = Number(process.env.PROJECT_MEDIA_SYNC_BATCH_SIZE) || 10;
 
     if (!cron.validate(crawlSchedule)) {
       throw new Error(`CRON_SCHEDULE không hợp lệ: ${crawlSchedule}`);
@@ -330,12 +333,16 @@ async function main() {
     if (imageSyncEnabled && imageSyncSchedule && !cron.validate(imageSyncSchedule)) {
       throw new Error(`IMAGE_SYNC_CRON không hợp lệ: ${imageSyncSchedule}`);
     }
+    if (projectMediaSyncEnabled && projectMediaSyncSchedule && !cron.validate(projectMediaSyncSchedule)) {
+      throw new Error(`PROJECT_MEDIA_SYNC_CRON không hợp lệ: ${projectMediaSyncSchedule}`);
+    }
 
-    console.log(`[Scheduler] ⏰ Bot V2 đã khởi động dịch vụ tự động:`);
+    console.log(`[Scheduler] ⏰ Bot V3.1 đã khởi động dịch vụ tự động:`);
     console.log(`  - Lịch cào dữ liệu (Crawl Schedule): [${crawlSchedule}]`);
     console.log(`  - Lịch gửi báo cáo ngày (Daily Mail): [${mailSchedule || 'Sau mỗi phiên'}]`);
     console.log(`  - Lịch gửi báo cáo tuần (Weekly Report): [${weeklyEnabled ? weeklySchedule : 'Đang tắt'}]`);
-    console.log(`  - Lịch đồng bộ ảnh Drive (Image Sync): [${imageSyncEnabled ? imageSyncSchedule : 'Đang tắt'}]`);
+    console.log(`  - Lịch đồng bộ ảnh căn Drive (Image Sync): [${imageSyncEnabled ? imageSyncSchedule : 'Đang tắt'}]`);
+    console.log(`  - Lịch đồng bộ Media dự án V3 (Project Media): [${projectMediaSyncEnabled ? projectMediaSyncSchedule : 'Đang tắt'}]`);
     console.log(`  - Múi giờ hoạt động: ${timezone}`);
     console.log(`  - Chế độ báo cáo ngày: ${process.env.MAIL_REPORT_MODE || 'DAILY'}`);
     console.log(`\n(Mẹo: Muốn quét và gửi email test ngay lập tức, gõ: npm run crawl:now)\n`);
@@ -375,13 +382,25 @@ async function main() {
       );
     }
 
-    // 4. Lịch đồng bộ hình ảnh Google Drive
+    // 4. Lịch đồng bộ hình ảnh căn riêng Google Drive
     if (imageSyncEnabled && imageSyncSchedule) {
       cron.schedule(
         imageSyncSchedule,
         async () => {
-          console.log(`\n[Cron ImageSync] 📸 Bắt đầu quét và đồng bộ hình ảnh Google Drive...`);
+          console.log(`\n[Cron ImageSync] 📸 Bắt đầu quét và đồng bộ hình ảnh căn riêng Google Drive...`);
           await syncPendingImages();
+        },
+        { timezone }
+      );
+    }
+
+    // 5. Lịch tự động đồng bộ Media dự án SalePro V3
+    if (projectMediaSyncEnabled && projectMediaSyncSchedule) {
+      cron.schedule(
+        projectMediaSyncSchedule,
+        async () => {
+          console.log(`\n[Cron ProjectMedia] 📁 Bắt đầu tự động cập nhật media cấp dự án SalePro V3...`);
+          await syncPendingProjectMedia({ limit: projectMediaBatchSize });
         },
         { timezone }
       );

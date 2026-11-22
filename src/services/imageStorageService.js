@@ -178,6 +178,12 @@ function extractAreaRange(featuresStr = '') {
 
 /**
  * Liên kết một căn Unit với danh sách product_layouts theo 3 mức độ (EXACT, TYPE_MATCH, UNMATCHED)
+ * Tuân thủ quy tắc V3.1:
+ * - Không gán EXACT nếu chỉ có 1 candidate mà thiếu căn cứ diện tích / thiết kế.
+ * - Không gán EXACT nếu có nhiều candidate có diện tích tương đương hoặc mơ hồ.
+ * - Đối chiếu mã thiết kế, phân khu, tòa nhà, loại diện tích (tim tường vs thông thủy).
+ * - Nếu chỉ khớp loại căn -> TYPE_MATCH.
+ * - Không chọn tùy tiện ứng viên đầu tiên.
  */
 function matchUnitWithProductLayouts(unit, productLayouts = []) {
   if (!unit || !productLayouts || productLayouts.length === 0) {
@@ -191,10 +197,10 @@ function matchUnitWithProductLayouts(unit, productLayouts = []) {
     return { matchLevel: 'UNMATCHED', matchedLayout: null, label: '' };
   }
 
-  // 1. Tìm layout có category khớp chính xác
+  // 1. Lọc các layouts thuộc category tương ứng
   let candidates = productLayouts.filter((p) => p.category === unitCategory);
 
-  // Nếu không khớp category, thử tìm qua tên tương đối
+  // Fallback: nếu không khớp theo category chuẩn, thử đối chiếu qua tên tương đối
   if (candidates.length === 0) {
     const normUnitType = removeVietnameseTones(rawUnitType).toLowerCase();
     candidates = productLayouts.filter((p) => {
@@ -207,60 +213,138 @@ function matchUnitWithProductLayouts(unit, productLayouts = []) {
     return { matchLevel: 'UNMATCHED', matchedLayout: null, label: '' };
   }
 
-  // 2. Nếu có nhiều candidates, thử đối chiếu chi tiết theo phong cách hoặc diện tích
-  let bestCandidate = candidates[0];
-  let isExact = false;
+  // 2. Thu thập các thuộc tính nhận diện của căn hộ
+  const unitAreaBuild = Number(unit.area_build || unit.raw_data?.built_up_area || 0); // Diện tích tim tường / xây dựng
+  const unitAreaLand = Number(unit.area_land || unit.raw_data?.carpet_area || 0);    // Diện tích thông thủy / đất
+  const unitCode = String(unit.unit_code || '').trim();
+  const unitSubdivision = removeVietnameseTones(String(unit.subdivision || '')).toLowerCase();
+  const unitBuilding = removeVietnameseTones(String(unit.building || '')).toLowerCase();
 
-  const unitArea =
-    unit.area_build || unit.area_land || unit.raw_data?.built_up_area || unit.raw_data?.carpet_area || 0;
+  // Kiểm tra mã thiết kế / mẫu layout nếu có trong raw_data hoặc unit_code
+  const unitDesignCode = String(
+    unit.raw_data?.design_code ||
+    unit.raw_data?.layout_code ||
+    unit.raw_data?.code_design ||
+    ''
+  ).toLowerCase().trim();
 
-  for (const cand of candidates) {
-    // Kiểm tra tên phong cách (ví dụ "Địa Trung Hải", "Tân Cổ Điển")
-    const candNorm = removeVietnameseTones(cand.product_name).toLowerCase();
-    const unitFullText = removeVietnameseTones(
-      `${unit.unit_code} ${unit.subdivision} ${rawUnitType} ${JSON.stringify(unit.raw_data || {})}`
-    ).toLowerCase();
-
-    if (candNorm.length > 5 && unitFullText.includes(candNorm)) {
-      bestCandidate = cand;
-      isExact = true;
-      break;
+  // ==========================================
+  // TIÊU CHÍ 1: Khớp mã thiết kế cụ thể (Explicit Design Code)
+  // ==========================================
+  if (unitDesignCode) {
+    const codeMatch = candidates.find((cand) => {
+      const candNorm = removeVietnameseTones(cand.product_name).toLowerCase();
+      return candNorm.includes(unitDesignCode) || (cand.features && cand.features.toLowerCase().includes(unitDesignCode));
+    });
+    if (codeMatch) {
+      return {
+        matchLevel: 'EXACT',
+        matchedLayout: codeMatch,
+        label: `Layout ${codeMatch.product_name} (Chính xác - Mã thiết kế ${unitDesignCode.toUpperCase()})`,
+      };
     }
+  }
 
-    // Kiểm tra diện tích
-    if (unitArea > 0 && cand.features) {
-      const range = extractAreaRange(cand.features);
-      if (range) {
-        if (unitArea >= range.min - 2 && unitArea <= range.max + 2) {
-          bestCandidate = cand;
-          isExact = true;
-          break;
+  // ==========================================
+  // TIÊU CHÍ 2: Khớp phong cách / phân khu kiến trúc đặc thù
+  // (ví dụ: Biệt thự "Địa Trung Hải", "Tân Cổ Điển", "Cọ Xanh", "Hải Đăng"...)
+  // ==========================================
+  const distinctKeywords = [
+    'dia trung hai', 'tan co dien', 'manhattan', 'indochine', 'nhat ban',
+    'paris', 'venice', 'monaco', 'florida', 'garden', 'golf'
+  ];
+  for (const cand of candidates) {
+    const candNorm = removeVietnameseTones(cand.product_name).toLowerCase();
+    for (const kw of distinctKeywords) {
+      if (candNorm.includes(kw)) {
+        const fullUnitContext = `${unitCode} ${unitSubdivision} ${unitBuilding} ${rawUnitType}`.toLowerCase();
+        if (fullUnitContext.includes(kw)) {
+          return {
+            matchLevel: 'EXACT',
+            matchedLayout: cand,
+            label: `Layout ${cand.product_name} (Chính xác - Phong cách ${kw})`,
+          };
         }
       }
     }
   }
 
-  // Nếu chỉ có 1 candidate duy nhất trong dự án cho loại căn này (vd: Studio chỉ có 1 layout Studio)
-  if (candidates.length === 1) {
-    if (unitArea > 0 && bestCandidate.features) {
-      const range = extractAreaRange(bestCandidate.features);
-      if (range && unitArea >= range.min - 3 && unitArea <= range.max + 3) {
-        isExact = true;
-      }
-    } else {
-      isExact = true;
+  // ==========================================
+  // TIÊU CHÍ 3: Khớp diện tích chặt chẽ (Tight Area Matching ±0.5m²)
+  // ==========================================
+  // Chỉ xét EXACT khi diện tích khớp rất sát (dung sai tối đa 0.5m²) và KHÔNG có sự nhập nhằng giữa nhiều layouts
+  const areaMatches = [];
+  for (const cand of candidates) {
+    if (!cand.features) continue;
+    const range = extractAreaRange(cand.features);
+    if (!range) continue;
+
+    // So sánh với diện tích xây dựng (tim tường) hoặc diện tích thông thủy (đất)
+    const matchesBuild = unitAreaBuild > 0 && unitAreaBuild >= range.min - 0.5 && unitAreaBuild <= range.max + 0.5;
+    const matchesLand = unitAreaLand > 0 && unitAreaLand >= range.min - 0.5 && unitAreaLand <= range.max + 0.5;
+
+    if (matchesBuild || matchesLand) {
+      areaMatches.push({
+        cand,
+        delta: Math.min(
+          unitAreaBuild > 0 ? Math.abs(unitAreaBuild - (range.min + range.max) / 2) : 999,
+          unitAreaLand > 0 ? Math.abs(unitAreaLand - (range.min + range.max) / 2) : 999
+        ),
+      });
     }
   }
 
-  const matchLevel = isExact ? 'EXACT' : 'TYPE_MATCH';
-  const label = isExact
-    ? `Layout ${bestCandidate.product_name} (Chính xác)`
-    : `Layout ${bestCandidate.product_name} (Tham khảo)`;
+  // Nếu duy nhất 1 candidate khớp diện tích chặt chẽ -> EXACT
+  if (areaMatches.length === 1) {
+    const best = areaMatches[0].cand;
+    return {
+      matchLevel: 'EXACT',
+      matchedLayout: best,
+      label: `Layout ${best.product_name} (Chính xác)`,
+    };
+  }
+
+  // Nếu có nhiều hơn 1 candidate đều khớp diện tích tương đương -> NHẬP NHẰNG (Ambiguous)
+  // Quy tắc nghiệp vụ V3.1: Không được đánh dấu EXACT, phải chuyển thành TYPE_MATCH (Tham khảo)
+  if (areaMatches.length > 1) {
+    areaMatches.sort((a, b) => a.delta - b.delta);
+    const best = areaMatches[0].cand;
+    return {
+      matchLevel: 'TYPE_MATCH',
+      matchedLayout: best,
+      label: `Layout ${best.product_name} (Tham khảo - Có ${areaMatches.length} thiết kế cùng diện tích)`,
+    };
+  }
+
+  // ==========================================
+  // TIÊU CHÍ 4: Không đủ căn cứ diện tích/thiết kế -> TYPE_MATCH (Tham khảo)
+  // Không gán EXACT ngay cả khi dự án chỉ có 1 layout cùng loại
+  // ==========================================
+  // Chọn layout có khoảng diện tích gần nhất nếu có features
+  let closestCandidate = candidates[0];
+  let minDiff = Infinity;
+  const targetArea = unitAreaBuild || unitAreaLand;
+
+  if (targetArea > 0) {
+    for (const cand of candidates) {
+      if (cand.features) {
+        const range = extractAreaRange(cand.features);
+        if (range) {
+          const mid = (range.min + range.max) / 2;
+          const diff = Math.abs(targetArea - mid);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestCandidate = cand;
+          }
+        }
+      }
+    }
+  }
 
   return {
-    matchLevel,
-    matchedLayout: bestCandidate,
-    label,
+    matchLevel: 'TYPE_MATCH',
+    matchedLayout: closestCandidate,
+    label: `Layout ${closestCandidate.product_name} (Tham khảo)`,
   };
 }
 
@@ -414,7 +498,7 @@ function detectBufferFormat(buffer, contentType = '', url = '') {
 }
 
 /**
- * Tải file an toàn từ URL kèm cơ chế retry, backoff, giới hạn dung lượng và chống SSRF
+ * Tải file an toàn từ URL kèm cơ chế retry, backoff, giới hạn dung lượng và chống SSRF (kể cả redirect)
  */
 async function downloadBufferWithRetry(rawUrl, maxRetries = DEFAULT_MAX_RETRIES) {
   const safeUrl = validateSafeUrl(rawUrl);
@@ -430,6 +514,10 @@ async function downloadBufferWithRetry(rawUrl, maxRetries = DEFAULT_MAX_RETRIES)
         timeout: DOWNLOAD_TIMEOUT_MS,
         maxContentLength: maxBytes,
         maxRedirects: 5,
+        beforeRedirect: (options) => {
+          const redirectUrl = options.href || `${options.protocol}//${options.hostname}${options.path}`;
+          validateSafeUrl(redirectUrl);
+        },
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -470,35 +558,76 @@ async function downloadBufferWithRetry(rawUrl, maxRetries = DEFAULT_MAX_RETRIES)
 }
 
 /**
- * Phân loại chính xác phân khúc Cao tầng hay Thấp tầng
+ * Phân loại chính xác phân khúc Cao tầng hay Thấp tầng chuẩn V3.1
+ * Ưu tiên:
+ * 1. Metadata dự án (HiSale project.typeName hoặc SalePro project_type)
+ * 2. Loại căn (unit_type) - Tiêu chuẩn quyết định hàng đầu cho từng căn
+ * 3. Tầng và tòa nhà (tránh ngộ nhận dãy nhà/lô đất thấp tầng là tòa cao tầng)
  */
 function determineSegment(item) {
   if (!item) return 'Thap_tang';
 
-  const rawType = String(
+  // 1. Kiểm tra loại hình dự án trực tiếp từ raw_data (HiSale project.typeName hoặc SalePro project_type)
+  const rawProjectType = String(
     item.project_type ||
     item.raw_data?.project_type ||
-    item.raw_data?.type ||
+    item.raw_data?.project?.typeName ||
+    item.raw_data?.typeName ||
     ''
   ).toLowerCase();
 
-  if (rawType.includes('high') || rawType.includes('cao')) return 'Cao_tang';
-  if (rawType.includes('low') || rawType.includes('thap')) return 'Thap_tang';
-
-  const floor = String(item.floor || item.number_of_floor || '').trim();
-  if (floor && floor !== '0') return 'Cao_tang';
-
-  const building = String(item.building || item.building_name || '').trim();
-  if (building) return 'Cao_tang';
-
-  const unitType = String(item.unit_type || item.apartment_type_name || '').toLowerCase();
+  const normProjectType = removeVietnameseTones(rawProjectType);
   if (
-    unitType.includes('căn hộ') ||
-    unitType.includes('chung cư') ||
-    unitType.includes('studio') ||
-    unitType.includes('penthouse') ||
-    unitType.includes('duplex')
+    normProjectType.includes('thap tang') ||
+    normProjectType.includes('low_rise') ||
+    normProjectType.includes('low rise')
   ) {
+    return 'Thap_tang';
+  }
+  if (
+    normProjectType.includes('cao tang') ||
+    normProjectType.includes('high_rise') ||
+    normProjectType.includes('high rise')
+  ) {
+    return 'Cao_tang';
+  }
+
+  // 2. Kiểm tra loại căn (unit_type) - Đây là tiêu chuẩn quyết định cho từng căn hộ
+  const unitType = removeVietnameseTones(
+    String(item.unit_type || item.raw_data?.type || item.raw_data?.apartment_type_name || '')
+  ).toLowerCase();
+
+  // Danh mục từ khóa thấp tầng đặc trưng (Liền kề, Biệt thự, Nhà phố, Shophouse, Đất nền...)
+  const lowRiseKeywords = [
+    'lien ke', 'biet thu', 'don lap', 'song lap', 'tu lap',
+    'nha pho', 'shophouse', 'shoptel', 'boutique', 'nha vuon', 'dat nen'
+  ];
+  if (lowRiseKeywords.some((kw) => unitType.includes(kw))) {
+    return 'Thap_tang';
+  }
+
+  // Danh mục từ khóa cao tầng đặc trưng (Căn hộ, Chung cư, Studio, Duplex, Penthouse, Phòng ngủ...)
+  const highRiseKeywords = [
+    'can ho', 'chung cu', 'studio', 'duplex', 'penthouse', 'officetel',
+    '1pn', '2pn', '3pn', '4pn', 'phong ngu'
+  ];
+  if (highRiseKeywords.some((kw) => unitType.includes(kw))) {
+    return 'Cao_tang';
+  }
+
+  // 3. Fallback: Kiểm tra số tầng & tòa nhà khi không có thông tin unit_type rõ ràng
+  const floorStr = String(item.floor || item.number_of_floor || '').trim();
+  const floorNum = parseInt(floorStr, 10);
+  if (!isNaN(floorNum) && floorNum > 5) {
+    return 'Cao_tang';
+  }
+
+  const building = removeVietnameseTones(String(item.building || item.building_name || '')).toLowerCase().trim();
+  if (building) {
+    return 'Cao_tang';
+  }
+
+  if (!isNaN(floorNum) && floorNum > 0) {
     return 'Cao_tang';
   }
 
@@ -739,8 +868,9 @@ async function syncSaleProProjectMedia(projectDoc) {
     if (allProjectImages.length > 0) {
       const subProjectFolder = await ensureFolderPath(['SalePro', segment, projectDoc.project_name, '_Project']);
 
-      // Giới hạn upload tối đa 10 ảnh phối cảnh tiêu biểu nhất để tối ưu dung lượng Drive
-      const imagesToUpload = allProjectImages.slice(0, 10);
+      // Cấu hình số ảnh phối cảnh tối đa qua .env (0 = không giới hạn, lấy toàn bộ)
+      const maxImagesLimit = process.env.IMAGE_MAX_PROJECT_IMAGES ? Number(process.env.IMAGE_MAX_PROJECT_IMAGES) : 0;
+      const imagesToUpload = maxImagesLimit > 0 ? allProjectImages.slice(0, maxImagesLimit) : allProjectImages;
 
       for (let i = 0; i < imagesToUpload.length; i++) {
         const item = imagesToUpload[i];
@@ -752,7 +882,15 @@ async function syncSaleProProjectMedia(projectDoc) {
             (img) => img.original_url === item.url && img.image_type === '_PROJECT'
           );
 
-          if (!existing || existing.sha256 !== sha256) {
+          let needUpload = !existing || existing.sha256 !== sha256;
+          if (existing && existing.sha256 === sha256 && existing.drive_file_id) {
+            const stillExists = await verifyDriveItemExists(existing.drive_file_id);
+            if (!stillExists) {
+              needUpload = true;
+            }
+          }
+
+          if (needUpload) {
             const fileName = i === 0 ? `project_avatar.${ext}` : `banner_${String(i).padStart(2, '0')}.${ext}`;
             const uploaded = await uploadFile({
               name: fileName,
@@ -810,8 +948,15 @@ async function syncSaleProProjectMedia(projectDoc) {
           );
 
           let driveUrl = existing?.drive_url;
+          let needUpload = !existing || existing.sha256 !== sha256;
+          if (existing && existing.sha256 === sha256 && existing.drive_file_id) {
+            const stillExists = await verifyDriveItemExists(existing.drive_file_id);
+            if (!stillExists) {
+              needUpload = true;
+            }
+          }
 
-          if (!existing || existing.sha256 !== sha256) {
+          if (needUpload) {
             const cleanFpName = sanitizeDriveName(fp.name || `floorplan_${i + 1}`);
             const fileName = `${cleanFpName}.${ext}`;
             const uploaded = await uploadFile({
@@ -885,8 +1030,15 @@ async function syncSaleProProjectMedia(projectDoc) {
           );
 
           let driveUrl = existing?.drive_url;
+          let needUpload = !existing || existing.sha256 !== sha256;
+          if (existing && existing.sha256 === sha256 && existing.drive_file_id) {
+            const stillExists = await verifyDriveItemExists(existing.drive_file_id);
+            if (!stillExists) {
+              needUpload = true;
+            }
+          }
 
-          if (!existing || existing.sha256 !== sha256) {
+          if (needUpload) {
             const cleanProdName = sanitizeDriveName(prod.name || `layout_${prod.category}`);
             const fileName = `${cleanProdName}.${ext}`;
             const uploaded = await uploadFile({
@@ -940,8 +1092,19 @@ async function syncSaleProProjectMedia(projectDoc) {
       }
     }
 
-    projectDoc.image_sync_status = 'SUCCESS';
-    projectDoc.image_synced_at = new Date();
+    // Xác định trạng thái đồng bộ chính xác theo chuẩn V3.1
+    let finalStatus = 'SUCCESS';
+    if (stats.totalFetched === 0) {
+      finalStatus = 'NO_IMAGE';
+    } else if (stats.errorCount > 0) {
+      finalStatus = stats.uploadedCount > 0 || stats.duplicateCount > 0 ? 'PARTIAL' : 'FAILED';
+    } else {
+      finalStatus = 'SUCCESS';
+    }
+
+    projectDoc.image_sync_status = finalStatus;
+    projectDoc.media_schema_version = 3;
+    projectDoc.media_synced_at = new Date();
     await projectDoc.save();
 
     // ==========================================
@@ -1084,7 +1247,15 @@ async function syncSingleUnit(unitDoc) {
 
         const existingStored = unitDoc.stored_images.find((img) => img.original_url === originalUrl);
 
-        if (existingStored && existingStored.sha256 === sha256 && existingStored.drive_url) {
+        let needUpload = !existingStored || existingStored.sha256 !== sha256;
+        if (existingStored && existingStored.sha256 === sha256 && existingStored.drive_file_id) {
+          const stillExists = await verifyDriveItemExists(existingStored.drive_file_id);
+          if (!stillExists) {
+            needUpload = true;
+          }
+        }
+
+        if (!needUpload && existingStored && existingStored.drive_url) {
           if (!unitDoc.drive_image_urls.includes(existingStored.drive_url)) {
             unitDoc.drive_image_urls.push(existingStored.drive_url);
           }
@@ -1094,11 +1265,17 @@ async function syncSingleUnit(unitDoc) {
 
         const duplicateHash = unitDoc.stored_images.find((img) => img.sha256 === sha256 && img.drive_url);
         if (duplicateHash) {
-          if (!unitDoc.drive_image_urls.includes(duplicateHash.drive_url)) {
-            unitDoc.drive_image_urls.push(duplicateHash.drive_url);
+          let dupStillExists = true;
+          if (duplicateHash.drive_file_id) {
+            dupStillExists = await verifyDriveItemExists(duplicateHash.drive_file_id);
           }
-          successCount++;
-          continue;
+          if (dupStillExists) {
+            if (!unitDoc.drive_image_urls.includes(duplicateHash.drive_url)) {
+              unitDoc.drive_image_urls.push(duplicateHash.drive_url);
+            }
+            successCount++;
+            continue;
+          }
         }
 
         const fileName = `image_${String(index + 1).padStart(2, '0')}.${ext}`;
@@ -1227,12 +1404,20 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
       image_sync_retries: { $lt: 3 },
     });
 
+    // Phát hiện các căn có ảnh mới hoặc URL ảnh bị thay thế (kể cả khi tổng số lượng URL không đổi)
     filterConditions.push({
       image_sync_status: 'SUCCESS',
       $expr: {
         $gt: [
-          { $size: { $ifNull: ['$image_urls', []] } },
-          { $size: { $ifNull: ['$stored_images', []] } },
+          {
+            $size: {
+              $setDifference: [
+                { $ifNull: ['$image_urls', []] },
+                { $ifNull: ['$stored_images.original_url', []] },
+              ],
+            },
+          },
+          0,
         ],
       },
     });
@@ -1242,12 +1427,41 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
       query.source = source.toLowerCase();
     }
 
-    const pendingUnits = await Unit.find(query)
+    const candidateUnits = await Unit.find(query)
       .sort({ created_at: -1 })
       .limit(batchSize);
 
-    if (pendingUnits.length === 0) {
+    if (candidateUnits.length === 0) {
       console.log(`[ImageSync] ✨ Không còn căn [${source}] nào đang chờ đồng bộ hình ảnh.`);
+      return { total: 0, success: 0 };
+    }
+
+    // Khóa nguyên tử (Atomic locking) để ngăn tranh chấp giữa CLI và background Scheduler
+    const pendingUnits = [];
+    for (const rawUnit of candidateUnits) {
+      const lockedUnit = await Unit.findOneAndUpdate(
+        {
+          _id: rawUnit._id,
+          $or: [
+            { image_sync_status: { $ne: 'PROCESSING' } },
+            { image_sync_locked_until: { $lt: new Date() } },
+          ],
+        },
+        {
+          $set: {
+            image_sync_status: 'PROCESSING',
+            image_sync_locked_until: new Date(Date.now() + LOCK_TIMEOUT_MS),
+          },
+        },
+        { new: true }
+      );
+      if (lockedUnit) {
+        pendingUnits.push(lockedUnit);
+      }
+    }
+
+    if (pendingUnits.length === 0) {
+      console.log(`[ImageSync] ℹ️ Các bản ghi hiện đang được xử lý bởi tiến trình khác.`);
       return { total: 0, success: 0 };
     }
 
@@ -1312,8 +1526,51 @@ function parseSaleProShareContent(text = '') {
   return result;
 }
 
+/**
+ * Tự động đồng bộ media cho các dự án SalePro V3 theo batch (Cron Job & CLI)
+ */
+async function syncPendingProjectMedia({ limit = 10, force = false } = {}) {
+  const driveCheck = isDriveConfigured();
+  if (!driveCheck.enabled) {
+    console.log(`[ProjectMediaSync] ℹ️ Google Drive chưa bật, bỏ qua.`);
+    return { enabled: false, reason: driveCheck.reason };
+  }
+
+  const query = { source: 'salepro' };
+  if (!force) {
+    query.$or = [
+      { media_schema_version: { $exists: false } },
+      { media_schema_version: { $lt: 3 } },
+      { image_sync_status: { $in: ['PENDING', 'PARTIAL', 'FAILED'] } },
+      { media_synced_at: { $lt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
+    ];
+  }
+
+  const projects = await Project.find(query)
+    .sort({ media_schema_version: 1, media_synced_at: 1, apartment_count: -1 })
+    .limit(limit);
+
+  if (projects.length === 0) {
+    console.log('[ProjectMediaSync] ✨ Tất cả dự án SalePro đã được đồng bộ đầy đủ media V3.');
+    return { total: 0, results: [] };
+  }
+
+  console.log(`\n====================================================================`);
+  console.log(`📁 [PROJECT MEDIA SYNC] TỰ ĐỘNG ĐỒNG BỘ ${projects.length} DỰ ÁN SALEPRO V3`);
+  console.log(`====================================================================`);
+
+  const results = [];
+  for (const proj of projects) {
+    const res = await syncSaleProProjectMedia(proj);
+    results.push(res);
+  }
+
+  return { total: projects.length, results };
+}
+
 module.exports = {
   syncPendingImages,
+  syncPendingProjectMedia,
   syncSingleUnit,
   syncSaleProProjectMedia,
   fetchSaleProPublicMedia,

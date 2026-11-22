@@ -1,38 +1,37 @@
-# 🏢 Real Estate Inventory Crawler & Media Storage System (V3)
+# 🏢 Real Estate Inventory Crawler & Media Storage System (V3.1 Production Readiness)
 
 Hệ thống backend tự động thu thập, chuẩn hóa, đối chiếu dữ liệu rổ hàng bất động sản từ các nền tảng **HiSale** (`hisale.vn`) và **SalePro** (`salepro.com`), lưu trữ nội bộ vào cơ sở dữ liệu **MongoDB Local** trên máy chủ VPS, tự động đồng bộ hình ảnh vào **Google Drive** theo phân cấp thư mục 3 tầng và gửi báo cáo định kỳ (báo cáo ngày & báo cáo tuần) kèm file Excel 26 cột chi tiết qua Gmail SMTP.
 
 ---
 
-## 🌟 Tính năng nổi bật trên phiên bản V3 (Chuyên sâu SalePro Media)
+## 🌟 Tính năng nổi bật trên phiên bản V3.1 (Production Readiness)
 
-- **Nâng cấp chuyên sâu Media SalePro V3**:
-  - Tích hợp 3 API công khai chính thức: `get_project_landing`, `get_project_detail`, `get_share_info` (giải mã slug liên kết).
-  - Thu thập đầy đủ dữ liệu thực tế từ: `avatar`, `banner_desktop`, `project_image`, `image_data`, `floor_plan`, `product`, `link_general`, `share_content`.
-  - Phân loại tài liệu rõ ràng: Bảng giá (`BANG_GIA`), Chính sách bán hàng (`CSBH`), Layout (`LAYOUT`), Hồ sơ pháp lý (`PHAP_LY`), Biểu mẫu cọc (`BIEU_MAU`).
-- **Cấu trúc Google Drive 3 tầng chuẩn hóa**:
-  - `_Project/`: Lưu toàn bộ ảnh đại diện, banner và phối cảnh dự án.
-  - `_FloorPlans/`: Lưu mặt bằng tổng thể, phân khu, tòa nhà và mặt bằng tầng.
-  - `_Layouts/<Category>/`: Lưu bản vẽ thiết kế theo từng phân loại chuẩn (`Studio`, `1PN`, `1PN_Plus`, `2PN`, `3PN`, `Lien_ke`, `Biet_thu_song_lap`, `Biet_thu_don_lap`, `Shophouse`, `Penthouse`...).
-  - Thư mục mã căn riêng chỉ được tạo khi thực sự có hình ảnh riêng của căn (tránh tạo thư mục rỗng).
-- **Thuật toán đối chiếu Layout đa tiêu chí (Multi-attribute Layout Matching)**:
-  - Phân tích đa tiêu chí: `project_id`, `subdivision`, `building`, `unit_type`, `area_land`, `area_build`, số phòng ngủ, mã thiết kế.
-  - Phân loại 3 mức độ khớp minh bạch:
-    - `EXACT`: Khớp chính xác cả loại căn và khoảng diện tích thiết kế.
-    - `TYPE_MATCH`: Khớp loại căn, gắn nhãn tham khảo rõ ràng `[Tham khảo: ...]`.
-    - `UNMATCHED`: Chưa đủ dữ liệu liên kết layout.
+- **Chuẩn hóa Thuật toán Đối chiếu Layout (Layout Matching Engine V3.1)**:
+  - Khớp diện tích chặt chẽ trong khoảng sai số cực nhỏ `±0.5 m²` (tim tường / thông thủy).
+  - Đối chiếu mã thiết kế cụ thể (`design_code`, `layout_code`), phân khu và phong cách kiến trúc đặc thù (Manhattan, Paris, v.v.).
+  - Xử lý nhập nhằng minh bạch: Khi có nhiều layout cùng diện tích tương đương hoặc khi thiếu thông tin diện tích, hệ thống chuyển sang `TYPE_MATCH` kèm nhãn tham khảo rõ ràng, tuyệt đối không gán `EXACT` tùy tiện.
   - Phân biệt tuyệt đối: 1PN với 1PN+, 2PN với 2PN+, Biệt thự đơn lập với Biệt thự song lập.
   - Ghi nhận trung thực: Căn SalePro không có ảnh riêng -> `image_sync_status = 'NO_IMAGE'`, không lấy avatar dự án giả làm ảnh riêng.
-- **Tối ưu hiệu năng & Tiết kiệm lưu trữ**:
-  - Đồng bộ media cấp dự án 1 lần duy nhất cho toàn bộ các căn cùng dự án (không gọi lặp API).
-  - **Chống trùng lặp tuyệt đối bằng SHA-256**: Kiểm tra mã băm nội dung ảnh trước khi upload. Chạy lại nhiều lần 0% upload trùng.
-- **Nâng cấp Báo cáo Excel 26 cột chuẩn V3**:
-  - Giữ nguyên 18 cột truyền thống và bổ sung 8 cột Google Drive & Media.
-  - Tách biệt cột ảnh riêng, ảnh layout thiết kế, mức độ khớp layout, ảnh mặt bằng, ảnh dự án, link thư mục và tài liệu.
-  - Tất cả URL cùng loại được đặt trong 1 ô ngăn cách bằng ký tự xuống dòng `\n`.
-  - Tích hợp Hyperlink mở trực tiếp thư mục Google Drive.
-- **Bộ điều phối linh hoạt (CLI Support)**:
-  - Cho phép truyền danh sách `--project-id=1295,1341,1475...` để kiểm thử chính xác từng dự án.
+- **Tự động Đồng bộ Media Dự án Định kỳ (Project Media Scheduler)**:
+  - Bổ sung Cron Job chạy nền (`PROJECT_MEDIA_SYNC_CRON`, mặc định 02:00 sáng hàng ngày) tự động quét và cập nhật media cho các dự án mới hoặc các dự án ở phiên bản schema cũ.
+  - Hỗ trợ nâng cấp mượt mà từ V2 lên V3.1 với trường `media_schema_version: 3` và `media_synced_at`.
+- **Cơ chế Phát hiện Thay đổi URL Ảnh & Tái sử dụng Drive Thông minh**:
+  - Phát hiện URL ảnh bị thay thế dù tổng số lượng ảnh không đổi thông qua logic `$setDifference`.
+  - Kiểm tra tính hợp lệ của file trên Google Drive trước khi tái sử dụng `drive_file_id`; nếu file đã bị xóa trên Drive thì tự động upload lại.
+- **Khắc phục Toàn diện Phân loại Phân khúc HiSale (determineSegment)**:
+  - Ưu tiên loại căn hộ (`unit_type`): Liền kề, Biệt thự, Shophouse được phân loại chính xác vào `Thap_tang` ngay cả khi có mã dãy (`TX5`, `CL2`, `SL01`) hoặc số tầng xây dựng.
+  - Bảo toàn 3.834 căn thấp tầng HiSale trong hệ thống.
+- **Bảo mật & Ổn định Hệ thống Chuyên sâu (Security & Concurrency)**:
+  - Chống SSRF đa chặng: Kiểm tra hostname trước mọi bước chuyển hướng HTTP (`beforeRedirect`).
+  - Kiểm tra chữ ký nhị phân (Magic Bytes) chống lưu nhầm các trang HTML/JSON lỗi vào Google Drive.
+  - Khóa nguyên tử (Atomic Locking) với `findOneAndUpdate` trạng thái `PROCESSING` ngăn chặn race condition khi chạy nhiều worker song song.
+- **Cấu hình Linh hoạt & Tiết kiệm Quota**:
+  - Cấu hình số lượng ảnh phối cảnh dự án qua `IMAGE_MAX_PROJECT_IMAGES` (mặc định: `0` = lưu toàn bộ).
+  - Tách biệt rõ ràng các trạng thái đồng bộ: `SUCCESS`, `PARTIAL`, `FAILED`, `NO_IMAGE`.
+  - Không bao giờ ghi đè media dự án thành mảng rỗng khi API đối tác gặp lỗi tạm thời.
+- **Báo cáo Excel 26 cột & Bộ Kiểm thử Toàn diện**:
+  - File Excel 26 cột chuẩn V3.1 với định dạng wrapText và Hyperlink mở Google Drive trực tiếp.
+  - Bộ kiểm thử tự động `node test/verifyV3.js` với 8 kịch bản kiểm thử độc lập đạt độ tin cậy 100%.
 
 ---
 
@@ -262,6 +261,10 @@ Lệnh sẽ kiểm tra quyền truy cập Thư mục tổng, tạo thử thư m�
 | `IMAGE_SYNC_BATCH_SIZE` | `20` | Số căn tối đa xử lý trong mỗi đợt đồng bộ |
 | `IMAGE_UPLOAD_CONCURRENCY` | `2` | Số luồng upload Drive song song |
 | `IMAGE_MAX_SIZE_MB` | `20` | Giới hạn dung lượng tối đa cho mỗi file ảnh |
+| `IMAGE_MAX_PROJECT_IMAGES` | `0` | Giới hạn số ảnh phối cảnh dự án tải về (`0` = không giới hạn) |
+| `PROJECT_MEDIA_SYNC_ENABLED` | `true` | Bật worker định kỳ đồng bộ media dự án SalePro V3.1 |
+| `PROJECT_MEDIA_SYNC_CRON` | `0 2 * * *` | Lịch đồng bộ media dự án tự động (02:00 sáng mỗi ngày) |
+| `PROJECT_MEDIA_SYNC_BATCH_SIZE` | `10` | Số lượng dự án tối đa xử lý trong mỗi phiên quét nền |
 
 ---
 
@@ -335,7 +338,8 @@ npm run images:backfill -- --source=salepro        # Đồng bộ tồn đọng 
 npm run report:weekly     # Tổng hợp và gửi báo cáo tuần ngay lập tức
 npm run test:mail:weekly  # Kiểm thử giao diện email báo cáo tuần bằng dữ liệu mẫu
 npm run test:mail         # Kiểm thử email báo cáo ngày mẫu
-npm test                  # Chạy bộ test tự động toàn diện (node test/verifyV2.js)
+npm test                  # Chạy bộ test tự động toàn diện V3.1 (node test/verifyV3.js)
+npm run test:v2           # Chạy bộ test tương thích ngược V2 (node test/verifyV2.js)
 ```
 
 ---

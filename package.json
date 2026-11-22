@@ -22,7 +22,8 @@
     "images:backfill": "node src/scripts/backfillImages.js",
     "report:weekly": "node src/scripts/weeklyReport.js --send",
     "test:mail:weekly": "node src/scripts/weeklyReport.js --test",
-    "test": "node test/verifyV2.js"
+    "test": "node test/verifyV3.js",
+    "test:v2": "node test/verifyV2.js"
   },
   "dependencies": {
     "@google-cloud/local-auth": "^3.0.1",

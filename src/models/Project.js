@@ -188,6 +188,15 @@ const projectSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  media_schema_version: {
+    type: Number,
+    default: 1, // 1: V1/V2 avatar only, 3: V3 Media (_Project, _FloorPlans, _Layouts)
+    index: true
+  },
+  media_synced_at: {
+    type: Date,
+    default: null
+  },
   updated_at: {
     type: Date,
     default: Date.now

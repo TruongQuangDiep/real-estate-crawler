@@ -51,12 +51,17 @@ async function main() {
       query.project_id = { $in: projectIds };
     } else if (!force) {
       query.$or = [
+        { media_schema_version: { $exists: false } },
+        { media_schema_version: { $lt: 3 } },
         { drive_project_image_urls: { $exists: false } },
         { drive_project_image_urls: { $size: 0 } },
+        { image_sync_status: { $in: ['PENDING', 'PARTIAL', 'FAILED'] } },
       ];
     }
 
-    const projects = await Project.find(query).limit(projectIds.length > 0 ? projectIds.length : limit);
+    const projects = await Project.find(query)
+      .sort({ media_schema_version: 1, apartment_count: -1 })
+      .limit(projectIds.length > 0 ? projectIds.length : limit);
 
     if (projects.length === 0) {
       console.log(`✨ Không tìm thấy dự án ${source.toUpperCase()} nào thỏa mãn điều kiện đồng bộ.`);
@@ -122,6 +127,10 @@ async function main() {
     console.log('====================================================================\n');
   } catch (err) {
     console.error('❌ Lỗi đồng bộ dự án:', err.message);
+    try {
+      await mongoose.disconnect();
+    } catch (_) {}
+    process.exit(1);
   } finally {
     await mongoose.disconnect();
     process.exit(0);
