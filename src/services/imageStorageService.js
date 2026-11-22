@@ -846,6 +846,37 @@ async function syncSaleProProjectMedia(projectDoc) {
     return { status: 'LOCKED_BY_OTHER', projectId: projectDoc.project_id };
   }
 
+  // Khởi động Heartbeat gia hạn khóa dự án định kỳ (ngăn mất lease khi tải ảnh/cập nhật lâu)
+  let projectHeartbeatTimer = null;
+  const projectHeartbeatIntervalMs = 60000; // mỗi 1 phút gia hạn 1 lần
+
+  projectHeartbeatTimer = setInterval(async () => {
+    try {
+      const renewRes = await Project.updateOne(
+        {
+          _id: projectDoc._id,
+          image_sync_lock_owner: projectLeaseId,
+          image_sync_locked_until: { $gt: new Date() },
+        },
+        {
+          $set: {
+            image_sync_locked_until: new Date(Date.now() + lockTimeoutMs),
+          },
+        }
+      );
+      if (renewRes.matchedCount === 0) {
+        console.warn(`[SalePro V3] ⚠️ Mất quyền gia hạn khóa dự án [${projectDoc.project_name}] (lease: ${projectLeaseId})`);
+        clearInterval(projectHeartbeatTimer);
+      }
+    } catch (renewErr) {
+      console.error(`[SalePro V3] ❌ Lỗi heartbeat dự án [${projectDoc.project_name}]:`, renewErr.message);
+    }
+  }, projectHeartbeatIntervalMs);
+
+  if (projectHeartbeatTimer && typeof projectHeartbeatTimer.unref === 'function') {
+    projectHeartbeatTimer.unref();
+  }
+
   try {
     // Đảm bảo thư mục chính của dự án trên Google Drive
     const projectFolder = await ensureFolderPath(['SalePro', segment, projectDoc.project_name]);
@@ -1192,31 +1223,30 @@ async function syncSaleProProjectMedia(projectDoc) {
           projectDoc.product_layouts
         );
 
-        unit.layout_match_level = matchLevel;
-        unit.layout_name = label;
-
-        if (matchedLayout && matchedLayout.drive_url) {
-          unit.layout_image_urls = [matchedLayout.image_url];
-          unit.drive_layout_image_urls = [matchedLayout.drive_url];
-        } else {
-          unit.layout_image_urls = [];
-          unit.drive_layout_image_urls = [];
-        }
-
-        unit.project_image_urls = projectDoc.project_image_urls;
-        unit.drive_project_image_urls = projectDoc.drive_project_image_urls;
-        unit.floor_plan_urls = (projectDoc.floor_plans || []).map((f) => f.image_url);
-        unit.drive_floor_plan_urls = (projectDoc.floor_plans || []).map((f) => f.drive_url).filter(Boolean);
-        unit.drive_folder_url = projectDoc.drive_folder_url;
-        unit.document_urls = projectDoc.document_urls;
-        unit.shared_media_status = 'SYNCED';
+        const unitUpdatePayload = {
+          layout_match_level: matchLevel,
+          layout_name: label,
+          layout_image_urls: (matchedLayout && matchedLayout.drive_url) ? [matchedLayout.image_url] : [],
+          drive_layout_image_urls: (matchedLayout && matchedLayout.drive_url) ? [matchedLayout.drive_url] : [],
+          project_image_urls: projectDoc.project_image_urls,
+          drive_project_image_urls: projectDoc.drive_project_image_urls,
+          floor_plan_urls: (projectDoc.floor_plans || []).map((f) => f.image_url),
+          drive_floor_plan_urls: (projectDoc.floor_plans || []).map((f) => f.drive_url).filter(Boolean),
+          drive_folder_url: projectDoc.drive_folder_url,
+          document_urls: projectDoc.document_urls,
+          shared_media_status: 'SYNCED',
+        };
 
         // Căn SalePro không có ảnh chụp riêng -> Ghi nhận trung thực NO_IMAGE
         if (!unit.image_urls || unit.image_urls.length === 0) {
-          unit.image_sync_status = 'NO_IMAGE';
+          unitUpdatePayload.image_sync_status = 'NO_IMAGE';
         }
 
-        await unit.save();
+        // Cập nhật nguyên tử chỉ các trường layout/media (không ghi đè các trường khác của căn)
+        await Unit.updateOne(
+          { _id: unit._id },
+          { $set: unitUpdatePayload }
+        );
         unitUpdateSuccessCount++;
 
         if (matchLevel === 'EXACT') exactCount++;
@@ -1302,6 +1332,11 @@ async function syncSaleProProjectMedia(projectDoc) {
       }
     ).catch(() => {});
     return { status: 'FAILED', error: err.message };
+  } finally {
+    if (projectHeartbeatTimer) {
+      clearInterval(projectHeartbeatTimer);
+      projectHeartbeatTimer = null;
+    }
   }
 }
 

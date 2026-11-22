@@ -401,8 +401,144 @@ async function runIntegrationTests() {
     assert.strictEqual(lockAfterWithLock, null, 'Khóa phải được giải phóng sau withLock');
     console.log('  ✅ Test 7 PASSED: Heartbeat tự động gia hạn khóa và giải phóng an toàn khi hoàn thành.\n');
 
+    // =========================================================================
+    // TEST 8: Kiểm thử mô phỏng toàn bộ luồng đồng bộ nhiều căn (50 units)
+    //         kèm Heartbeat khóa Project và atomic Unit.updateOne
+    // =========================================================================
+    console.log('Test 8: Mô phỏng toàn bộ luồng đồng bộ dự án 50 căn với Project Heartbeat và Atomic Unit Update...');
+
+    const multiProject = await Project.create({
+      source: 'salepro',
+      project_id: 99903,
+      project_name: 'Dự án Test 50 Căn Heartbeat',
+      project_type: 'high_rise',
+      image_sync_status: 'PENDING',
+      media_schema_version: 1,
+      product_layouts: [
+        { product_name: 'Căn hộ 2PN', category: '2PN', image_url: 'http://example.com/2pn.jpg', drive_url: 'https://drive.google.com/2pn' },
+      ],
+    });
+
+    // Tạo 50 căn cho dự án này
+    const unitsToCreate = [];
+    for (let i = 1; i <= 50; i++) {
+      unitsToCreate.push({
+        source: 'salepro',
+        project_id: multiProject.project_id,
+        project_name: multiProject.project_name,
+        unit_code: `UNIT-50-${String(i).padStart(3, '0')}`,
+        unit_type: '2PN',
+        raw_data: { important_user_tag: `preserve_me_${i}`, notes: 'do_not_overwrite' },
+        image_sync_status: 'PENDING',
+      });
+    }
+    await Unit.insertMany(unitsToCreate);
+
+    const test8LeaseId = crypto.randomUUID();
+    const shortTtlMs = 400; // Khóa chỉ kéo dài 400ms (nếu không có heartbeat sẽ hết hạn ngay)
+    const hbIntervalMs = 100;
+
+    // 1. Worker giành khóa Project
+    await Project.updateOne(
+      { _id: multiProject._id },
+      {
+        $set: {
+          image_sync_status: 'PROCESSING',
+          image_sync_lock_owner: test8LeaseId,
+          image_sync_locked_until: new Date(Date.now() + shortTtlMs),
+        },
+      }
+    );
+
+    let renewSuccessCount = 0;
+    const projectHeartbeatTimer = setInterval(async () => {
+      try {
+        const renewRes = await Project.updateOne(
+          {
+            _id: multiProject._id,
+            image_sync_lock_owner: test8LeaseId,
+            image_sync_locked_until: { $gt: new Date() },
+          },
+          {
+            $set: {
+              image_sync_locked_until: new Date(Date.now() + shortTtlMs),
+            },
+          }
+        );
+        if (renewRes.matchedCount > 0) {
+          renewSuccessCount++;
+        }
+      } catch (_) {}
+    }, hbIntervalMs);
+
+    let totalUpdatedUnits = 0;
+    try {
+      // Mô phỏng vòng lặp xử lý 50 căn tốn 800ms (> shortTtlMs 400ms)
+      const projectUnits = await Unit.find({ project_id: multiProject.project_id });
+      assert.strictEqual(projectUnits.length, 50);
+
+      for (const u of projectUnits) {
+        // Mô phỏng độ trễ xử lý từng căn
+        await new Promise((r) => setTimeout(r, 16));
+
+        // Kiểm tra khóa trước mỗi căn
+        const checkProj = await Project.findOne({
+          _id: multiProject._id,
+          image_sync_lock_owner: test8LeaseId,
+          image_sync_locked_until: { $gt: new Date() },
+        });
+        assert.ok(checkProj, 'Khóa Project phải còn hiệu lực nhờ Heartbeat liên tục');
+
+        // Cập nhật nguyên tử không ảnh hưởng trường khác
+        await Unit.updateOne(
+          { _id: u._id },
+          {
+            $set: {
+              layout_match_level: 'EXACT',
+              layout_name: 'Layout Căn hộ 2PN',
+              shared_media_status: 'SYNCED',
+              image_sync_status: 'NO_IMAGE',
+            },
+          }
+        );
+        totalUpdatedUnits++;
+      }
+
+      // Hoàn tất: Cập nhật thành công và nâng schema version lên 3
+      await Project.updateOne(
+        { _id: multiProject._id, image_sync_lock_owner: test8LeaseId },
+        {
+          $set: {
+            image_sync_status: 'SUCCESS',
+            media_schema_version: 3,
+            image_sync_locked_until: null,
+            image_sync_lock_owner: null,
+          },
+        }
+      );
+    } finally {
+      clearInterval(projectHeartbeatTimer);
+    }
+
+    assert.strictEqual(totalUpdatedUnits, 50, 'Toàn bộ 50 căn phải được xử lý trọn vẹn');
+    assert.ok(renewSuccessCount >= 4, `Heartbeat dự án phải được renew ít nhất 4 lần (thực tế: ${renewSuccessCount})`);
+
+    // Kiểm tra tính toàn vẹn của document: raw_data không bị mất/ghi đè
+    const verifySampleUnit = await Unit.findOne({ unit_code: 'UNIT-50-025' });
+    assert.strictEqual(verifySampleUnit.raw_data.important_user_tag, 'preserve_me_25');
+    assert.strictEqual(verifySampleUnit.raw_data.notes, 'do_not_overwrite');
+    assert.strictEqual(verifySampleUnit.shared_media_status, 'SYNCED');
+    assert.strictEqual(verifySampleUnit.image_sync_status, 'NO_IMAGE');
+
+    const verifyFinalProj = await Project.findById(multiProject._id);
+    assert.strictEqual(verifyFinalProj.image_sync_status, 'SUCCESS');
+    assert.strictEqual(verifyFinalProj.media_schema_version, 3);
+    assert.strictEqual(verifyFinalProj.image_sync_lock_owner, null);
+
+    console.log('  ✅ Test 8 PASSED: Luồng đồng bộ 50 căn chạy bền bỉ với Heartbeat, bảo toàn toàn vẹn dữ liệu căn.\n');
+
     console.log('====================================================================');
-    console.log('🎉 TOÀN BỘ 7 BỘ TEST TÍCH HỢP CONCURRENCY TRÊN MONGODB TEST THÀNH CÔNG 100%!');
+    console.log('🎉 TOÀN BỘ 8 BỘ TEST TÍCH HỢP CONCURRENCY TRÊN MONGODB TEST THÀNH CÔNG 100%!');
     console.log('====================================================================\n');
   } finally {
     // Dọn dẹp sạch sẽ DB test
