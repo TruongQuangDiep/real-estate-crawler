@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { OAuth2Client } = require('google-auth-library');
 
-const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+const SCOPES = ['https://www.googleapis.com/auth/drive'];
 
 const credentialsPath = path.resolve(process.env.GOOGLE_DRIVE_CREDENTIALS || './credentials/credentials.json');
 const tokenPath = path.resolve(process.env.GOOGLE_DRIVE_TOKEN || './credentials/token.json');

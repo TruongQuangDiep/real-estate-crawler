@@ -26,6 +26,7 @@ async function testGoogleDriveIntegration() {
     const rootRes = await drive.files.get({
       fileId: rootId,
       fields: 'id, name, mimeType, capabilities, owners, permissions',
+      supportsAllDrives: true,
     });
 
     console.log(`   ✅ Đã kết nối thành công tới thư mục: "${rootRes.data.name}"`);
@@ -70,11 +71,9 @@ async function testGoogleDriveIntegration() {
     console.error(`\n❌ Lỗi khi kiểm tra Google Drive API:`, err.message);
     if (err.code === 404 || err.message?.includes('File not found')) {
       console.error(`\n💡 NGUYÊN NHÂN LỖI 404 (File not found):`);
-      console.error(`   Hệ thống đang sử dụng OAuth Scope bảo mật cao nhất: 'https://www.googleapis.com/auth/drive.file'.`);
-      console.error(`   Quy định bảo mật của Google Drive API với scope này là:`);
-      console.error(`   - Ứng dụng chỉ có quyền truy cập vào các file/thư mục DO CHÍNH ỨNG DỤNG TẠO RA, HOẶC`);
-      console.error(`   - Thư mục có sẵn phải được người dùng cấp quyền rõ ràng thông qua Google Picker.`);
-      console.error(`   Nếu thư mục [${check.rootId}] được tạo thủ công trên web Drive, Google sẽ ẩn nó đi đối với bot.\n`);
+      console.error(`   Không tìm thấy hoặc không có quyền truy cập vào thư mục [${check.rootId}].`);
+      console.error(`   - Nếu đây là thư mục do người khác chia sẻ: Hãy đảm bảo tài khoản Gmail của bạn đã được cấp quyền "Người chỉnh sửa" (Editor).`);
+      console.error(`   - Nếu vừa thay đổi quyền hoặc scope: Chạy lại lệnh 'npm run drive:auth' để cấp lại quyền truy cập mới.\n`);
       console.error(`🛠️ 2 CÁCH KHẮC PHỤC CỰC KỲ ĐƠN GIẢN:`);
       console.error(`   👉 CÁCH 1 (Khuyên dùng - Nhanh nhất): Tự động tạo thư mục chuẩn qua API:`);
       console.error(`      Chạy lệnh: npm run drive:create-root`);

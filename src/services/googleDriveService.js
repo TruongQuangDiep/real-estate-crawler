@@ -150,6 +150,7 @@ async function verifyDriveItemExists(fileId) {
       drive.files.get({
         fileId: fileId.trim(),
         fields: 'id, trashed, name',
+        supportsAllDrives: true,
       })
     );
     return Boolean(res.data && !res.data.trashed);
@@ -193,6 +194,8 @@ async function ensureFolder(folderName, parentFolderId) {
         fields: 'files(id, name, webViewLink)',
         spaces: 'drive',
         pageSize: 1,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
       })
     );
 
@@ -216,6 +219,7 @@ async function ensureFolder(folderName, parentFolderId) {
           parents: [parentFolderId],
         },
         fields: 'id, name, webViewLink',
+        supportsAllDrives: true,
       })
     );
 
@@ -298,6 +302,7 @@ async function uploadFile({ name, buffer, mimeType, parentFolderId, description 
         body: stream,
       },
       fields: 'id, name, mimeType, size, webViewLink, webContentLink',
+      supportsAllDrives: true,
     })
   );
 
