@@ -321,6 +321,9 @@ npm run report:now        # Gửi ngay báo cáo tổng hợp ngày kèm file Ex
 # ==========================================
 # GOOGLE DRIVE & MEDIA (V3)
 # ==========================================
+# 🚀 LỆNH TỔNG (KHUYÊN DÙNG) - Tự động tải TOÀN BỘ media SalePro & căn HiSale lên Drive sếp
+npm run images:sync-all   # Đồng bộ trọn gói 100% tất cả dự án & căn (có tự động resume nếu ngắt)
+
 npm run drive:auth        # Hướng dẫn và xác thực Google Drive OAuth lần đầu
 npm run drive:create-root # Tự động tạo thư mục tổng qua API & tự cập nhật ID vào .env
 npm run drive:picker      # Cấp quyền thư mục công ty có sẵn qua giao diện Google Picker
