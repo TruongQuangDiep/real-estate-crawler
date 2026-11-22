@@ -1120,23 +1120,10 @@ async function syncSaleProProjectMedia(projectDoc) {
       }
     }
 
-    // Xác định trạng thái đồng bộ chính xác theo chuẩn V3.1
-    let finalStatus = 'SUCCESS';
-    let finalError = '';
-    if (stats.totalFetched === 0) {
-      finalStatus = 'NO_IMAGE';
-    } else if (stats.errorCount > 0) {
-      finalStatus = stats.uploadedCount > 0 || stats.duplicateCount > 0 ? 'PARTIAL' : 'FAILED';
-      finalError = `Đồng bộ chưa trọn vẹn: ${stats.errorCount} file tải/upload thất bại`;
-    } else {
-      finalStatus = 'SUCCESS';
-    }
-
-    const updateFields = {
-      image_sync_status: finalStatus,
-      image_sync_error: finalError,
-      image_sync_locked_until: null,
-      image_sync_lock_owner: null,
+    // 4. Lưu dữ liệu media cấp dự án vào MongoDB (VẪN GIỮ KHÓA DỰ ÁN CHO ĐẾN KHI CẬP NHẬT CĂN XONG)
+    const interimProjectFields = {
+      image_sync_status: 'PROCESSING',
+      image_sync_error: '',
       drive_folder_id: projectDoc.drive_folder_id,
       drive_folder_url: projectDoc.drive_folder_url,
       project_image_urls: projectDoc.project_image_urls,
@@ -1150,26 +1137,19 @@ async function syncSaleProProjectMedia(projectDoc) {
       stored_images: projectDoc.stored_images,
     };
 
-    // QUAN TRỌNG (Yêu cầu 2): media_schema_version = 3 CHỈ được gán khi SUCCESS hoặc NO_IMAGE!
-    // Nếu PARTIAL hoặc FAILED -> giữ nguyên media_schema_version cũ (< 3) để các lần sync tiếp theo tự retry
-    if (finalStatus === 'SUCCESS' || finalStatus === 'NO_IMAGE') {
-      updateFields.media_schema_version = 3;
-      updateFields.media_synced_at = new Date();
-    }
-
-    // Conditional update: chỉ worker sở hữu khóa (projectLeaseId) và khóa còn hạn mới được ghi kết quả
-    const projectSaveRes = await Project.updateOne(
+    // Conditional update: chỉ worker đang sở hữu khóa (projectLeaseId) mới được ghi kết quả
+    const interimSaveRes = await Project.updateOne(
       {
         _id: projectDoc._id,
         image_sync_lock_owner: projectLeaseId,
         image_sync_locked_until: { $gt: new Date() },
       },
       {
-        $set: updateFields,
+        $set: interimProjectFields,
       }
     );
 
-    if (projectSaveRes.matchedCount === 0) {
+    if (interimSaveRes.matchedCount === 0) {
       console.warn(
         `[SalePro V3] ⚠️ Khóa dự án ${projectDoc.project_name} (lease: ${projectLeaseId}) đã hết hạn hoặc bị worker khác chiếm. Hủy ghi kết quả.`
       );
@@ -1177,7 +1157,7 @@ async function syncSaleProProjectMedia(projectDoc) {
     }
 
     // ==========================================
-    // 5. Lan tỏa và liên kết layout tới từng căn trong MongoDB
+    // 5. Lan tỏa và liên kết layout tới từng căn trong MongoDB (Vẫn trong vùng khóa)
     // ==========================================
     const unitsOfProject = await Unit.find({
       source: 'salepro',
@@ -1188,42 +1168,64 @@ async function syncSaleProProjectMedia(projectDoc) {
     let exactCount = 0;
     let typeMatchCount = 0;
     let unmatchedCount = 0;
+    let unitUpdateSuccessCount = 0;
+    let unitUpdateErrorCount = 0;
 
     for (const unit of unitsOfProject) {
-      const { matchLevel, matchedLayout, label } = matchUnitWithProductLayouts(
-        unit,
-        projectDoc.product_layouts
-      );
+      // Kiểm tra định kỳ xem khóa dự án có còn hiệu lực không
+      const lockCheck = await Project.findOne({
+        _id: projectDoc._id,
+        image_sync_lock_owner: projectLeaseId,
+        image_sync_locked_until: { $gt: new Date() },
+      }).select('_id');
 
-      unit.layout_match_level = matchLevel;
-      unit.layout_name = label;
-
-      if (matchedLayout && matchedLayout.drive_url) {
-        unit.layout_image_urls = [matchedLayout.image_url];
-        unit.drive_layout_image_urls = [matchedLayout.drive_url];
-      } else {
-        unit.layout_image_urls = [];
-        unit.drive_layout_image_urls = [];
+      if (!lockCheck) {
+        console.warn(
+          `[SalePro V3] ⚠️ Mất quyền sở hữu khóa dự án ${projectDoc.project_name} trong lúc cập nhật căn hộ. Dừng lan tỏa dữ liệu.`
+        );
+        return { status: 'LOCK_LOST_DURING_UNIT_UPDATE', projectId: projectDoc.project_id };
       }
 
-      unit.project_image_urls = projectDoc.project_image_urls;
-      unit.drive_project_image_urls = projectDoc.drive_project_image_urls;
-      unit.floor_plan_urls = (projectDoc.floor_plans || []).map((f) => f.image_url);
-      unit.drive_floor_plan_urls = (projectDoc.floor_plans || []).map((f) => f.drive_url).filter(Boolean);
-      unit.drive_folder_url = projectDoc.drive_folder_url;
-      unit.document_urls = projectDoc.document_urls;
-      unit.shared_media_status = 'SYNCED';
+      try {
+        const { matchLevel, matchedLayout, label } = matchUnitWithProductLayouts(
+          unit,
+          projectDoc.product_layouts
+        );
 
-      // Căn SalePro không có ảnh chụp riêng -> Ghi nhận trung thực NO_IMAGE
-      if (!unit.image_urls || unit.image_urls.length === 0) {
-        unit.image_sync_status = 'NO_IMAGE';
+        unit.layout_match_level = matchLevel;
+        unit.layout_name = label;
+
+        if (matchedLayout && matchedLayout.drive_url) {
+          unit.layout_image_urls = [matchedLayout.image_url];
+          unit.drive_layout_image_urls = [matchedLayout.drive_url];
+        } else {
+          unit.layout_image_urls = [];
+          unit.drive_layout_image_urls = [];
+        }
+
+        unit.project_image_urls = projectDoc.project_image_urls;
+        unit.drive_project_image_urls = projectDoc.drive_project_image_urls;
+        unit.floor_plan_urls = (projectDoc.floor_plans || []).map((f) => f.image_url);
+        unit.drive_floor_plan_urls = (projectDoc.floor_plans || []).map((f) => f.drive_url).filter(Boolean);
+        unit.drive_folder_url = projectDoc.drive_folder_url;
+        unit.document_urls = projectDoc.document_urls;
+        unit.shared_media_status = 'SYNCED';
+
+        // Căn SalePro không có ảnh chụp riêng -> Ghi nhận trung thực NO_IMAGE
+        if (!unit.image_urls || unit.image_urls.length === 0) {
+          unit.image_sync_status = 'NO_IMAGE';
+        }
+
+        await unit.save();
+        unitUpdateSuccessCount++;
+
+        if (matchLevel === 'EXACT') exactCount++;
+        else if (matchLevel === 'TYPE_MATCH') typeMatchCount++;
+        else unmatchedCount++;
+      } catch (unitErr) {
+        unitUpdateErrorCount++;
+        console.warn(`[SalePro V3] ⚠️ Lỗi cập nhật căn [${unit.unit_code}]:`, unitErr.message);
       }
-
-      await unit.save();
-
-      if (matchLevel === 'EXACT') exactCount++;
-      else if (matchLevel === 'TYPE_MATCH') typeMatchCount++;
-      else unmatchedCount++;
     }
 
     stats.unitCount = unitsOfProject.length;
@@ -1231,14 +1233,59 @@ async function syncSaleProProjectMedia(projectDoc) {
     stats.typeMatchCount = typeMatchCount;
     stats.unmatchedCount = unmatchedCount;
 
+    // Xác định trạng thái đồng bộ chính xác sau khi TOÀN BỘ căn đã xử lý
+    let finalStatus = 'SUCCESS';
+    let finalError = '';
+
+    if (stats.totalFetched === 0) {
+      finalStatus = 'NO_IMAGE';
+    } else if (stats.errorCount > 0 || unitUpdateErrorCount > 0) {
+      finalStatus = stats.uploadedCount > 0 || unitUpdateSuccessCount > 0 ? 'PARTIAL' : 'FAILED';
+      finalError = [
+        stats.errorCount > 0 ? `${stats.errorCount} file tải/upload thất bại` : '',
+        unitUpdateErrorCount > 0 ? `${unitUpdateErrorCount}/${unitsOfProject.length} căn cập nhật layout thất bại` : '',
+      ]
+        .filter(Boolean)
+        .join('; ');
+    } else {
+      finalStatus = 'SUCCESS';
+    }
+
+    // 6. GIẢI PHÓNG KHÓA DỰ ÁN VÀ CẬP NHẬT TRẠNG THÁI CUỐI CÙNG
+    const finalProjectFields = {
+      image_sync_status: finalStatus,
+      image_sync_error: finalError,
+      image_sync_locked_until: null,
+      image_sync_lock_owner: null,
+    };
+
+    // QUAN TRỌNG: CHỈ set media_schema_version = 3 khi SUCCESS hoặc NO_IMAGE (không còn lỗi nào)
+    if (finalStatus === 'SUCCESS' || finalStatus === 'NO_IMAGE') {
+      finalProjectFields.media_schema_version = 3;
+      finalProjectFields.media_synced_at = new Date();
+    }
+
+    await Project.updateOne(
+      {
+        _id: projectDoc._id,
+        image_sync_lock_owner: projectLeaseId,
+      },
+      {
+        $set: finalProjectFields,
+      }
+    );
+
     console.log(`  ✅ Hoàn tất liên kết:`);
     console.log(`     • Khớp chính xác (EXACT): ${exactCount} căn`);
     console.log(`     • Khớp loại tham khảo (TYPE_MATCH): ${typeMatchCount} căn`);
     console.log(`     • Chưa liên kết được (UNMATCHED): ${unmatchedCount} căn`);
+    if (unitUpdateErrorCount > 0) {
+      console.warn(`     • Cập nhật thất bại: ${unitUpdateErrorCount} căn (Dự án được đánh dấu PARTIAL để retry)`);
+    }
     console.log(`====================================================================\n`);
 
     return {
-      status: 'SUCCESS',
+      status: finalStatus,
       ...stats,
     };
   } catch (err) {
@@ -1285,8 +1332,8 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           image_sync_status: 'PROCESSING',
           image_sync_locked_until: new Date(Date.now() + LOCK_TIMEOUT_MS),
           image_sync_lock_owner: effectiveLeaseId,
-          $inc: { image_sync_retries: 1 },
         },
+        $inc: { image_sync_retries: 1 },
       },
       { new: true }
     );

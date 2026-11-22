@@ -346,6 +346,7 @@ npm run test:mail:weekly  # Kiểm thử giao diện email báo cáo tuần bằ
 npm run test:mail         # Kiểm thử email báo cáo ngày mẫu
 npm test                  # Chạy bộ test tự động toàn diện V3.1 (node test/verifyV3.js)
 npm run test:v2           # Chạy bộ test tương thích ngược V2 (node test/verifyV2.js)
+npm run test:integration # Chạy bộ test tích hợp Concurrency & Lock trên MongoDB test riêng (node test/integration.test.js)
 ```
 
 ---

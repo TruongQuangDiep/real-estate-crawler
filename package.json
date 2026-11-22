@@ -26,7 +26,8 @@
     "report:weekly": "node src/scripts/weeklyReport.js --send",
     "test:mail:weekly": "node src/scripts/weeklyReport.js --test",
     "test": "node test/verifyV3.js",
-    "test:v2": "node test/verifyV2.js"
+    "test:v2": "node test/verifyV2.js",
+    "test:integration": "node test/integration.test.js"
   },
   "dependencies": {
     "@google-cloud/local-auth": "^3.0.1",
