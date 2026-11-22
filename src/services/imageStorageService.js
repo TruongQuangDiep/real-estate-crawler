@@ -781,13 +781,13 @@ async function fetchSaleProPublicMedia(projectId, shareContent = '') {
 /**
  * Nâng cấp V3: Đồng bộ toàn diện Media dự án SalePro (_Project, _FloorPlans, _Layouts)
  */
-async function syncSaleProProjectMedia(projectDoc) {
+async function syncSaleProProjectMedia(projectDoc, options = {}) {
   if (!projectDoc || projectDoc.source !== 'salepro') return;
 
   const driveCheck = isDriveConfigured();
   if (!driveCheck.enabled) {
     console.log(`[SalePro V3] Google Drive chưa bật, bỏ qua đồng bộ media dự án ${projectDoc.project_name}`);
-    return;
+    return { status: 'SKIPPED_DRIVE_DISABLED', projectId: projectDoc.project_id };
   }
 
   const segment = determineSegment(projectDoc);
@@ -818,8 +818,18 @@ async function syncSaleProProjectMedia(projectDoc) {
     driveFolderUrl: '',
   };
 
-  const projectLeaseId = crypto.randomUUID();
-  const lockTimeoutMs = 15 * 60 * 1000;
+  const projectLeaseId = options.leaseId || crypto.randomUUID();
+  const lockTimeoutMs = options.lockTimeoutMs || 15 * 60 * 1000;
+  const projectHeartbeatIntervalMs = options.heartbeatIntervalMs || 60000;
+
+  // Trạng thái khóa nội bộ: worker nhận tín hiệu dừng ngay khi mất lease hoặc không gia hạn được
+  const projectLockState = {
+    isLost: false,
+    lostReason: '',
+  };
+  if (options.lockStateRef && typeof options.lockStateRef === 'object') {
+    options.lockStateRef.state = projectLockState;
+  }
 
   // Lấy khóa xử lý nguyên tử cấp dự án với lease ID (ngăn xung đột worker song song)
   const lockedProj = await Project.findOneAndUpdate(
@@ -848,7 +858,6 @@ async function syncSaleProProjectMedia(projectDoc) {
 
   // Khởi động Heartbeat gia hạn khóa dự án định kỳ (ngăn mất lease khi tải ảnh/cập nhật lâu)
   let projectHeartbeatTimer = null;
-  const projectHeartbeatIntervalMs = 60000; // mỗi 1 phút gia hạn 1 lần
 
   projectHeartbeatTimer = setInterval(async () => {
     try {
@@ -866,7 +875,10 @@ async function syncSaleProProjectMedia(projectDoc) {
       );
       if (renewRes.matchedCount === 0) {
         console.warn(`[SalePro V3] ⚠️ Mất quyền gia hạn khóa dự án [${projectDoc.project_name}] (lease: ${projectLeaseId})`);
+        projectLockState.isLost = true;
+        projectLockState.lostReason = 'HEARTBEAT_RENEW_FAILED_OR_LEASE_EXPIRED';
         clearInterval(projectHeartbeatTimer);
+        projectHeartbeatTimer = null;
       }
     } catch (renewErr) {
       console.error(`[SalePro V3] ❌ Lỗi heartbeat dự án [${projectDoc.project_name}]:`, renewErr.message);
@@ -878,6 +890,10 @@ async function syncSaleProProjectMedia(projectDoc) {
   }
 
   try {
+    if (projectLockState.isLost) {
+      console.warn(`[SalePro V3] ⚠️ Mất quyền khóa dự án [${projectDoc.project_name}] trước khi xử lý media.`);
+      return { status: 'LOCK_LOST', reason: projectLockState.lostReason, projectId: projectDoc.project_id };
+    }
     // Đảm bảo thư mục chính của dự án trên Google Drive
     const projectFolder = await ensureFolderPath(['SalePro', segment, projectDoc.project_name]);
     projectDoc.drive_folder_id = projectFolder.id;
@@ -1203,12 +1219,20 @@ async function syncSaleProProjectMedia(projectDoc) {
     let unitUpdateErrorCount = 0;
 
     for (const unit of unitsOfProject) {
-      // Kiểm tra định kỳ xem khóa dự án có còn hiệu lực không
+      // 1. Kiểm tra cờ Heartbeat
+      if (projectLockState.isLost) {
+        console.warn(
+          `[SalePro V3] ⚠️ Tín hiệu Heartbeat báo mất khóa dự án [${projectDoc.project_name}]. Dừng cập nhật căn hộ ngay lập tức.`
+        );
+        return { status: 'LOCK_LOST_DURING_UNIT_UPDATE', reason: projectLockState.lostReason, projectId: projectDoc.project_id };
+      }
+
+      // 2. Thao tác đọc khóa Project: kiểm tra xem khóa dự án có còn hiệu lực trong DB không
       const lockCheck = await Project.findOne({
         _id: projectDoc._id,
         image_sync_lock_owner: projectLeaseId,
         image_sync_locked_until: { $gt: new Date() },
-      }).select('_id');
+      }).select('image_sync_locked_until');
 
       if (!lockCheck) {
         console.warn(
@@ -1240,6 +1264,37 @@ async function syncSaleProProjectMedia(projectDoc) {
         // Căn SalePro không có ảnh chụp riêng -> Ghi nhận trung thực NO_IMAGE
         if (!unit.image_urls || unit.image_urls.length === 0) {
           unitUpdatePayload.image_sync_status = 'NO_IMAGE';
+        }
+
+        // 3. KIỂM TRA TÌNH HUỐNG LEASE HẾT HẠN GIỮA THAO TÁC ĐỌC KHÓA VÀ GHI UNIT:
+        // Đảm bảo không ghi dữ liệu lỗi thời nếu khóa hết hạn hoặc bị mất trong khoảng trống này
+        if (projectLockState.isLost) {
+          console.warn(
+            `[SalePro V3] ⚠️ Heartbeat báo mất lease trước khi ghi căn [${unit.unit_code}]. Hủy ghi để tránh dữ liệu lỗi thời.`
+          );
+          return { status: 'LOCK_LOST_DURING_UNIT_UPDATE', reason: projectLockState.lostReason, projectId: projectDoc.project_id };
+        }
+
+        // Kiểm tra thời gian hết hạn theo lockCheck vừa đọc: nếu thời điểm hiện tại đã vượt quá locked_until
+        if (Date.now() >= new Date(lockCheck.image_sync_locked_until).getTime()) {
+          console.warn(
+            `[SalePro V3] ⚠️ Khóa dự án đã hết hạn giữa lúc đọc khóa và chuẩn bị ghi căn [${unit.unit_code}]. Hủy ghi dữ liệu lỗi thời.`
+          );
+          return { status: 'LOCK_LOST_DURING_UNIT_UPDATE', projectId: projectDoc.project_id };
+        }
+
+        // Tái xác thực nhanh trên DB trước khi ghi để bảo vệ tuyệt đối chống stale write
+        const preWriteValid = await Project.exists({
+          _id: projectDoc._id,
+          image_sync_lock_owner: projectLeaseId,
+          image_sync_locked_until: { $gt: new Date() },
+        });
+
+        if (!preWriteValid) {
+          console.warn(
+            `[SalePro V3] ⚠️ Khóa dự án không còn hiệu lực trên DB ngay trước khi ghi căn [${unit.unit_code}]. Hủy ghi dữ liệu lỗi thời.`
+          );
+          return { status: 'LOCK_LOST_DURING_UNIT_UPDATE', projectId: projectDoc.project_id };
         }
 
         // Cập nhật nguyên tử chỉ các trường layout/media (không ghi đè các trường khác của căn)
@@ -1282,6 +1337,17 @@ async function syncSaleProProjectMedia(projectDoc) {
     }
 
     // 6. GIẢI PHÓNG KHÓA DỰ ÁN VÀ CẬP NHẬT TRẠNG THÁI CUỐI CÙNG
+    if (projectLockState.isLost) {
+      console.warn(
+        `[SalePro V3] ⚠️ Tín hiệu Heartbeat báo mất khóa dự án [${projectDoc.project_name}] trước khi cập nhật cuối cùng. Hủy ghi kết quả.`
+      );
+      return {
+        status: 'LOCK_LOST_AT_FINAL_UPDATE',
+        projectId: projectDoc.project_id,
+        error: 'Heartbeat lost lease before final status update',
+      };
+    }
+
     const finalProjectFields = {
       image_sync_status: finalStatus,
       image_sync_error: finalError,
@@ -1295,15 +1361,27 @@ async function syncSaleProProjectMedia(projectDoc) {
       finalProjectFields.media_synced_at = new Date();
     }
 
-    await Project.updateOne(
+    const finalUpdateRes = await Project.updateOne(
       {
         _id: projectDoc._id,
         image_sync_lock_owner: projectLeaseId,
+        image_sync_locked_until: { $gt: new Date() },
       },
       {
         $set: finalProjectFields,
       }
     );
+
+    if (finalUpdateRes.matchedCount === 0) {
+      console.warn(
+        `[SalePro V3] ⚠️ Không thể cập nhật trạng thái cuối cùng cho dự án [${projectDoc.project_name}] vì mất quyền sở hữu khóa hoặc khóa đã hết hạn.`
+      );
+      return {
+        status: 'LOCK_LOST_AT_FINAL_UPDATE',
+        projectId: projectDoc.project_id,
+        error: 'Worker lost project lock or lease expired before final status update',
+      };
+    }
 
     console.log(`  ✅ Hoàn tất liên kết:`);
     console.log(`     • Khớp chính xác (EXACT): ${exactCount} căn`);
@@ -1321,7 +1399,11 @@ async function syncSaleProProjectMedia(projectDoc) {
   } catch (err) {
     console.error(`[SalePro Media V3] ❌ Lỗi nghiêm trọng đồng bộ dự án ${projectDoc.project_name}:`, err.message);
     await Project.updateOne(
-      { _id: projectDoc._id, image_sync_lock_owner: projectLeaseId },
+      {
+        _id: projectDoc._id,
+        image_sync_lock_owner: projectLeaseId,
+        image_sync_locked_until: { $gt: new Date() },
+      },
       {
         $set: {
           image_sync_status: 'FAILED',

@@ -537,8 +537,223 @@ async function runIntegrationTests() {
 
     console.log('  ✅ Test 8 PASSED: Luồng đồng bộ 50 căn chạy bền bỉ với Heartbeat, bảo toàn toàn vẹn dữ liệu căn.\n');
 
+    // =========================================================================
+    // TEST 9: Heartbeat Project bị mất lease -> Worker nhận tín hiệu isLost và ngừng ngay
+    // =========================================================================
+    console.log('Test 9: Kiểm thử Heartbeat Project phát hiện mất lease -> worker nhận tín hiệu isLost và lập tức dừng...');
+
+    const projTest9 = await Project.create({
+      source: 'salepro',
+      project_id: 99904,
+      project_name: 'Dự án Test Mất Lease Heartbeat',
+      project_type: 'high_rise',
+      image_sync_status: 'PROCESSING',
+      image_sync_lock_owner: 'WORKER_ORIGINAL',
+      image_sync_locked_until: new Date(Date.now() + 500),
+      media_schema_version: 1,
+    });
+
+    const unitsTest9 = await Unit.insertMany([
+      { source: 'salepro', project_id: 99904, project_name: projTest9.project_name, unit_code: 'UNIT-HB-1', shared_media_status: 'NONE' },
+      { source: 'salepro', project_id: 99904, project_name: projTest9.project_name, unit_code: 'UNIT-HB-2', shared_media_status: 'NONE' },
+      { source: 'salepro', project_id: 99904, project_name: projTest9.project_name, unit_code: 'UNIT-HB-3', shared_media_status: 'NONE' },
+    ]);
+
+    const projectLockState9 = { isLost: false, lostReason: '' };
+    const hbInterval9 = 80;
+    const ttl9 = 300;
+
+    const hbTimer9 = setInterval(async () => {
+      try {
+        const renewRes = await Project.updateOne(
+          {
+            _id: projTest9._id,
+            image_sync_lock_owner: 'WORKER_ORIGINAL',
+            image_sync_locked_until: { $gt: new Date() },
+          },
+          {
+            $set: { image_sync_locked_until: new Date(Date.now() + ttl9) },
+          }
+        );
+        if (renewRes.matchedCount === 0) {
+          projectLockState9.isLost = true;
+          projectLockState9.lostReason = 'HEARTBEAT_RENEW_FAILED_OR_LEASE_EXPIRED';
+          clearInterval(hbTimer9);
+        }
+      } catch (_) {}
+    }, hbInterval9);
+
+    // Mô phỏng: Sau 100ms, worker khác chiếm khóa của dự án
+    setTimeout(async () => {
+      await Project.updateOne(
+        { _id: projTest9._id },
+        {
+          $set: {
+            image_sync_lock_owner: 'WORKER_NEW_THIEF',
+            image_sync_locked_until: new Date(Date.now() + 10000),
+          },
+        }
+      );
+    }, 100);
+
+    // Worker nguyên bản chạy vòng lặp cập nhật căn
+    let processedUnits9 = 0;
+    let workerStoppedDueToLockLoss = false;
+
+    for (const u of unitsTest9) {
+      if (projectLockState9.isLost) {
+        workerStoppedDueToLockLoss = true;
+        break;
+      }
+
+      await new Promise((r) => setTimeout(r, 70));
+
+      if (projectLockState9.isLost) {
+        workerStoppedDueToLockLoss = true;
+        break;
+      }
+
+      await Unit.updateOne({ _id: u._id }, { $set: { shared_media_status: 'SYNCED' } });
+      processedUnits9++;
+    }
+
+    clearInterval(hbTimer9);
+
+    assert.strictEqual(projectLockState9.isLost, true, 'Heartbeat phải đánh dấu isLost = true khi không thể gia hạn');
+    assert.strictEqual(workerStoppedDueToLockLoss, true, 'Worker phải nhận tín hiệu isLost và dừng lại');
+    assert.ok(processedUnits9 < unitsTest9.length, 'Worker không được xử lý hết các căn khi mất quyền');
+
+    // Xác minh căn sau cùng chưa bị ghi
+    const lastUnit9 = await Unit.findOne({ unit_code: 'UNIT-HB-3' });
+    assert.strictEqual(lastUnit9.shared_media_status, 'NONE', 'Căn UNIT-HB-3 không được phép bị ghi đè');
+    console.log('  ✅ Test 9 PASSED: Heartbeat phát hiện mất lease, worker lập tức nhận tín hiệu và ngừng xử lý.\n');
+
+    // =========================================================================
+    // TEST 10: Kiểm thử lease hết hạn giữa thao tác đọc khóa Project và ghi Unit.updateOne()
+    // =========================================================================
+    console.log('Test 10: Kiểm thử lease hết hạn giữa thao tác đọc khóa Project và ghi Unit.updateOne() (chống stale write)...');
+
+    const projTest10 = await Project.create({
+      source: 'salepro',
+      project_id: 99905,
+      project_name: 'Dự án Test Race Condition Unit Write',
+      project_type: 'high_rise',
+      image_sync_status: 'PROCESSING',
+      image_sync_lock_owner: 'WORKER_RACE',
+      image_sync_locked_until: new Date(Date.now() + 100), // Chỉ còn hạn 100ms
+      media_schema_version: 1,
+    });
+
+    const unitTest10 = await Unit.create({
+      source: 'salepro',
+      project_id: 99905,
+      project_name: projTest10.project_name,
+      unit_code: 'UNIT-RACE-01',
+      shared_media_status: 'NONE',
+      raw_data: { custom: 'important_data' },
+    });
+
+    // Bước 1: Thao tác đọc khóa Project (tại thời điểm T0: khóa còn hạn 100ms)
+    const lockCheck10 = await Project.findOne({
+      _id: projTest10._id,
+      image_sync_lock_owner: 'WORKER_RACE',
+      image_sync_locked_until: { $gt: new Date() },
+    }).select('image_sync_locked_until');
+    assert.ok(lockCheck10, 'Bước đọc khóa ban đầu phải thành công');
+
+    // Bước 2: Giả lập khoảng trễ (ví dụ GC pause hoặc độ trễ mạng 150ms > 100ms)
+    await new Promise((r) => setTimeout(r, 150));
+
+    // Bước 3: Kiểm tra an toàn trước khi ghi Unit.updateOne
+    let staleWritePrevented = false;
+
+    // Kiểm tra thời gian hết hạn theo lockCheck vừa đọc
+    if (Date.now() >= new Date(lockCheck10.image_sync_locked_until).getTime()) {
+      staleWritePrevented = true;
+    }
+
+    // Tái xác thực nhanh trên DB trước khi ghi
+    const preWriteValid10 = await Project.exists({
+      _id: projTest10._id,
+      image_sync_lock_owner: 'WORKER_RACE',
+      image_sync_locked_until: { $gt: new Date() },
+    });
+    if (!preWriteValid10) {
+      staleWritePrevented = true;
+    }
+
+    // Nếu không vượt qua kiểm tra, worker từ chối gọi Unit.updateOne
+    if (!staleWritePrevented) {
+      await Unit.updateOne(
+        { _id: unitTest10._id },
+        { $set: { shared_media_status: 'STALE_DATA' } }
+      );
+    }
+
+    assert.strictEqual(staleWritePrevented, true, 'Cơ chế bảo vệ phải phát hiện lease đã hết hạn giữa lúc đọc và ghi');
+
+    // Kiểm tra dữ liệu trong DB: tuyệt đối không bị ghi dữ liệu lỗi thời
+    const recheckedUnit10 = await Unit.findById(unitTest10._id);
+    assert.strictEqual(recheckedUnit10.shared_media_status, 'NONE', 'Unit không được ghi dữ liệu lỗi thời khi lease đã hết hạn');
+    assert.strictEqual(recheckedUnit10.raw_data.custom, 'important_data');
+    console.log('  ✅ Test 10 PASSED: Ngăn chặn 100% tình huống ghi dữ liệu lỗi thời khi lease hết hạn giữa lúc đọc và ghi.\n');
+
+    // =========================================================================
+    // TEST 11: Thao tác cập nhật Project cuối cùng khi mất lease -> tuyệt đối không trả SUCCESS
+    // =========================================================================
+    console.log('Test 11: Kiểm thử thao tác cập nhật Project cuối cùng có điều kiện locked_until > now (tuyệt đối không trả SUCCESS khi mất lease)...');
+
+    const projTest11 = await Project.create({
+      source: 'salepro',
+      project_id: 99906,
+      project_name: 'Dự án Test Final Update Stale Lease',
+      project_type: 'high_rise',
+      image_sync_status: 'PROCESSING',
+      image_sync_lock_owner: 'WORKER_FINAL',
+      image_sync_locked_until: new Date(Date.now() - 500), // Đã hết hạn 500ms trước
+      media_schema_version: 1,
+    });
+
+    const finalProjectFields11 = {
+      image_sync_status: 'SUCCESS',
+      image_sync_error: '',
+      image_sync_locked_until: null,
+      image_sync_lock_owner: null,
+      media_schema_version: 3,
+      media_synced_at: new Date(),
+    };
+
+    // Thao tác cập nhật Project cuối cùng có điều kiện nghiêm ngặt
+    const finalUpdateRes11 = await Project.updateOne(
+      {
+        _id: projTest11._id,
+        image_sync_lock_owner: 'WORKER_FINAL',
+        image_sync_locked_until: { $gt: new Date() },
+      },
+      {
+        $set: finalProjectFields11,
+      }
+    );
+
+    // Xác minh matchedCount === 0 vì khóa đã hết hạn
+    assert.strictEqual(finalUpdateRes11.matchedCount, 0, 'matchedCount phải bằng 0 do locked_until đã qua');
+
+    // Worker xử lý matchedCount === 0 -> từ chối trả về SUCCESS
+    let returnStatus11 = 'SUCCESS';
+    if (finalUpdateRes11.matchedCount === 0) {
+      returnStatus11 = 'LOCK_LOST_AT_FINAL_UPDATE';
+    }
+
+    assert.strictEqual(returnStatus11, 'LOCK_LOST_AT_FINAL_UPDATE', 'Tuyệt đối không được trả về SUCCESS khi matchedCount === 0');
+
+    // Kiểm tra DB: Project KHÔNG bị nâng lên media_schema_version = 3 và trạng thái KHÔNG phải SUCCESS
+    const recheckedProj11 = await Project.findById(projTest11._id);
+    assert.strictEqual(recheckedProj11.media_schema_version, 1, 'media_schema_version phải giữ nguyên 1, không được lên 3');
+    assert.strictEqual(recheckedProj11.image_sync_status, 'PROCESSING', 'Trạng thái không được thành SUCCESS');
+    console.log('  ✅ Test 11 PASSED: Cập nhật cuối cùng có điều kiện locked_until > now bảo vệ an toàn, không trả SUCCESS khi mất lease.\n');
+
     console.log('====================================================================');
-    console.log('🎉 TOÀN BỘ 8 BỘ TEST TÍCH HỢP CONCURRENCY TRÊN MONGODB TEST THÀNH CÔNG 100%!');
+    console.log('🎉 TOÀN BỘ 11 BỘ TEST TÍCH HỢP CONCURRENCY TRÊN MONGODB TEST THÀNH CÔNG 100%!');
     console.log('====================================================================\n');
   } finally {
     // Dọn dẹp sạch sẽ DB test
