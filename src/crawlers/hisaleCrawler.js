@@ -416,6 +416,7 @@ async function saveUnitsToMongo(units, projectId, isInitialSync, projectMeta = n
     const unitCode = item.code || item.name || `UNKNOWN_${item.id}`;
 
     const images = [];
+    const documents = [];
     let rawImageList = item.image_price_list_json;
     if (!Array.isArray(rawImageList) && typeof item.image_price_list === 'string' && item.image_price_list.trim()) {
       try {
@@ -424,9 +425,18 @@ async function saveUnitsToMongo(units, projectId, isInitialSync, projectMeta = n
         rawImageList = [];
       }
     }
+    const DOCUMENT_EXTENSIONS = ['.xlsx', '.xls', '.pdf', '.doc', '.docx', '.csv', '.zip', '.rar'];
     if (Array.isArray(rawImageList)) {
       rawImageList.forEach((img) => {
-        if (img && img.url) images.push(img.url);
+        if (img && img.url) {
+          const cleanUrl = String(img.url).split('?')[0].split('#')[0].toLowerCase();
+          const isDoc = DOCUMENT_EXTENSIONS.some((ext) => cleanUrl.endsWith(ext));
+          if (isDoc) {
+            documents.push(img.url);
+          } else {
+            images.push(img.url);
+          }
+        }
       });
     }
 
@@ -456,6 +466,7 @@ async function saveUnitsToMongo(units, projectId, isInitialSync, projectMeta = n
             bank_support: item.bank_cart || '',
             price_list_url: item.price_list || '',
             image_urls: images,
+            ...(documents.length > 0 ? { document_urls: documents } : {}),
             raw_data: item,
             updated_at: new Date()
           },

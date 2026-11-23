@@ -12,9 +12,9 @@ const {
 
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_CONCURRENCY = 2;
-const DEFAULT_MAX_SIZE_MB = 20;
+const DEFAULT_MAX_SIZE_MB = 0; // 0 = không giới hạn dung lượng ảnh tải về
 const DEFAULT_MAX_RETRIES = 3;
-const DOWNLOAD_TIMEOUT_MS = 20000;
+const DOWNLOAD_TIMEOUT_MS = 60000; // 60s để tải các file ảnh lớn mượt mà
 const LOCK_TIMEOUT_MS = 15 * 60 * 1000; // Khóa xử lý 15 phút
 
 let isSyncRunning = false;
@@ -502,7 +502,9 @@ function detectBufferFormat(buffer, contentType = '', url = '') {
  */
 async function downloadBufferWithRetry(rawUrl, maxRetries = DEFAULT_MAX_RETRIES) {
   const safeUrl = validateSafeUrl(rawUrl);
-  const maxBytes = (Number(process.env.IMAGE_MAX_SIZE_MB) || DEFAULT_MAX_SIZE_MB) * 1024 * 1024;
+  const envVal = process.env.IMAGE_MAX_SIZE_MB;
+  const maxMb = envVal !== undefined && envVal !== '' ? Number(envVal) : DEFAULT_MAX_SIZE_MB;
+  const maxBytes = maxMb > 0 ? maxMb * 1024 * 1024 : Infinity;
   let attempt = 0;
   let lastErr = null;
 
@@ -512,7 +514,8 @@ async function downloadBufferWithRetry(rawUrl, maxRetries = DEFAULT_MAX_RETRIES)
       const response = await axios.get(safeUrl, {
         responseType: 'arraybuffer',
         timeout: DOWNLOAD_TIMEOUT_MS,
-        maxContentLength: maxBytes,
+        maxContentLength: maxBytes === Infinity ? Infinity : maxBytes,
+        maxBodyLength: maxBytes === Infinity ? Infinity : maxBytes,
         maxRedirects: 5,
         beforeRedirect: (options) => {
           const redirectUrl = options.href || `${options.protocol}//${options.hostname}${options.path}`;
@@ -1461,7 +1464,30 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
   }
 
   const sourceName = (unitDoc.source || 'hisale').toLowerCase() === 'hisale' ? 'HiSale' : 'SalePro';
-  const urlsToSync = Array.isArray(unitDoc.image_urls) ? unitDoc.image_urls.filter(Boolean) : [];
+  const rawUrls = Array.isArray(unitDoc.image_urls) ? unitDoc.image_urls.filter(Boolean) : [];
+
+  // Tách tài liệu (Excel, PDF, Word, v.v.) bị up nhầm vào image_urls
+  const DOCUMENT_EXTENSIONS = ['.xlsx', '.xls', '.pdf', '.doc', '.docx', '.csv', '.zip', '.rar'];
+  unitDoc.document_urls = Array.isArray(unitDoc.document_urls) ? unitDoc.document_urls : [];
+  const urlsToSync = [];
+  let hasMisplacedDocs = false;
+
+  for (const u of rawUrls) {
+    const cleanUrl = String(u).split('?')[0].split('#')[0].toLowerCase();
+    const isDoc = DOCUMENT_EXTENSIONS.some((ext) => cleanUrl.endsWith(ext));
+    if (isDoc) {
+      hasMisplacedDocs = true;
+      if (!unitDoc.document_urls.includes(u)) {
+        unitDoc.document_urls.push(u);
+      }
+    } else {
+      urlsToSync.push(u);
+    }
+  }
+
+  if (hasMisplacedDocs) {
+    unitDoc.image_urls = urlsToSync;
+  }
 
   // Nếu là SalePro và căn không có ảnh riêng:
   if (sourceName === 'SalePro' && urlsToSync.length === 0) {
@@ -1477,6 +1503,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
           image_synced_at: new Date(),
+          ...(hasMisplacedDocs ? { image_urls: [], document_urls: unitDoc.document_urls } : {}),
         },
       }
     );
@@ -1499,6 +1526,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
           image_synced_at: new Date(),
+          ...(hasMisplacedDocs ? { image_urls: [], document_urls: unitDoc.document_urls } : {}),
         },
       }
     );
@@ -1626,6 +1654,22 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
         if (uploadErr.message && uploadErr.message.startsWith('LOCK_LOST:')) {
           throw uploadErr;
         }
+        if (
+          uploadErr.message &&
+          (uploadErr.message.includes('Định dạng dữ liệu không xác định') ||
+            uploadErr.message.includes('MIME: application/'))
+        ) {
+          console.warn(
+            `[ImageSync] ℹ️ File [${originalUrl}] của căn ${unitDoc.unit_code} là tài liệu (không phải ảnh), tự động chuyển sang danh mục tài liệu.`
+          );
+          unitDoc.document_urls = unitDoc.document_urls || [];
+          if (!unitDoc.document_urls.includes(originalUrl)) {
+            unitDoc.document_urls.push(originalUrl);
+          }
+          unitDoc.image_urls = (unitDoc.image_urls || []).filter((u) => u !== originalUrl);
+          hasMisplacedDocs = true;
+          continue;
+        }
         failCount++;
         unitDoc.image_sync_error = uploadErr.message;
         console.warn(
@@ -1636,7 +1680,10 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     }
 
     let finalStatus = 'SUCCESS';
-    if (successCount === urlsToSync.length) {
+    if (urlsToSync.length === 0) {
+      finalStatus = 'NO_IMAGE';
+      unitDoc.image_sync_error = '';
+    } else if (successCount === urlsToSync.length) {
       finalStatus = 'SUCCESS';
       unitDoc.image_sync_error = '';
     } else if (successCount > 0) {
@@ -1663,6 +1710,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           image_synced_at: new Date(),
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
+          ...(hasMisplacedDocs ? { image_urls: unitDoc.image_urls, document_urls: unitDoc.document_urls } : {}),
         },
       }
     );
@@ -1748,7 +1796,13 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
 
     filterConditions.push({
       $or: [
-        { image_sync_status: { $in: ['PENDING', 'PARTIAL'] } },
+        {
+          image_sync_status: { $in: ['PENDING', 'PARTIAL'] },
+          $or: [
+            { image_sync_retries: { $lt: DEFAULT_MAX_RETRIES } },
+            { image_sync_retries: { $exists: false } },
+          ],
+        },
         { image_sync_status: { $exists: false } },
       ],
     });
