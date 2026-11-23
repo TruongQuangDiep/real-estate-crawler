@@ -481,8 +481,31 @@ function detectBufferFormat(buffer, contentType = '', url = '') {
     return { mimeType: 'image/bmp', ext: 'bmp' };
   }
 
+  // HEIC / HEIF / AVIF: [offset 4..7] = 'ftyp'
+  if (
+    buffer.length >= 12 &&
+    buffer[4] === 0x66 &&
+    buffer[5] === 0x74 &&
+    buffer[6] === 0x79 &&
+    buffer[7] === 0x70
+  ) {
+    const brand = buffer.slice(8, 12).toString('latin1').toLowerCase();
+    if (['heic', 'heix', 'hevc', 'hevx', 'mif1', 'msf1'].includes(brand)) {
+      return { mimeType: 'image/heic', ext: 'heic' };
+    }
+    if (brand === 'avif' || brand === 'avis') {
+      return { mimeType: 'image/avif', ext: 'avif' };
+    }
+  }
+
   if (cleanHeader.includes('image/png') || url.toLowerCase().endsWith('.png')) {
     return { mimeType: 'image/png', ext: 'png' };
+  }
+  if (cleanHeader.includes('image/heic') || cleanHeader.includes('image/heif') || url.toLowerCase().includes('.heic') || url.toLowerCase().includes('.heif')) {
+    return { mimeType: 'image/heic', ext: 'heic' };
+  }
+  if (cleanHeader.includes('image/avif') || url.toLowerCase().includes('.avif')) {
+    return { mimeType: 'image/avif', ext: 'avif' };
   }
   if (cleanHeader.includes('image/webp') || url.toLowerCase().endsWith('.webp')) {
     return { mimeType: 'image/webp', ext: 'webp' };
@@ -1656,8 +1679,11 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
         }
         if (
           uploadErr.message &&
-          (uploadErr.message.includes('Định dạng dữ liệu không xác định') ||
-            uploadErr.message.includes('MIME: application/'))
+          (uploadErr.message.includes('spreadsheetml') ||
+            uploadErr.message.includes('excel') ||
+            uploadErr.message.includes('pdf') ||
+            uploadErr.message.includes('msword') ||
+            uploadErr.message.includes('officedocument'))
         ) {
           console.warn(
             `[ImageSync] ℹ️ File [${originalUrl}] của căn ${unitDoc.unit_code} là tài liệu (không phải ảnh), tự động chuyển sang danh mục tài liệu.`
