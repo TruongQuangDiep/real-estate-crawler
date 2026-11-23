@@ -24,6 +24,7 @@
     "images:sync-projects": "node src/scripts/syncProjects.js",
     "images:backfill": "node src/scripts/backfillImages.js",
     "images:sync-all": "node src/scripts/syncAll.js",
+    "export:excel": "node src/scripts/exportExcel.js",
     "report:weekly": "node src/scripts/weeklyReport.js --send",
     "test:mail:weekly": "node src/scripts/weeklyReport.js --test",
     "test": "node test/verifyV3.js",
