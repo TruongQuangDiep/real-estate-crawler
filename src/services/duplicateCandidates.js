@@ -112,7 +112,9 @@ function addDuplicateSheet(workbook,units,lookupDrive) {
   ws.getColumn('price').numFmt='#,##0';
   for(const key of ['land','build'])ws.getColumn(key).numFmt='#,##0.00';
   ws.getColumn('seen').numFmt='dd/mm/yyyy hh:mm:ss';
-  ws.autoFilter=`A8:U${Math.max(8,ws.rowCount)}`;ws.views=[{state:'frozen',ySplit:8,xSplit:1}];
+  // Introductory merged cells cross column A. Freezing that column clips them,
+  // and freezing eight intro rows leaves too little room to inspect records.
+  ws.autoFilter=`A8:U${Math.max(8,ws.rowCount)}`;ws.views=[{state:'normal'}];
   return result;
 }
 module.exports={projectKey,codeKey,findDuplicateCandidates,addDuplicateSheet};

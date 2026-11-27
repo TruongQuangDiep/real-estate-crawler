@@ -27,6 +27,8 @@ async function main(){
   const buffer=await wb.xlsx.writeBuffer(),loaded=new ExcelJS.Workbook();await loaded.xlsx.load(buffer);
   const ws=loaded.getWorksheet('Can_nghi_trung');
   assert.equal(ws.rowCount,10);assert.equal(ws.autoFilter,'A8:U10');
+  assert.equal(ws.views[0].state,'normal');
+  assert.ok(!ws.views[0].xSplit && !ws.views[0].ySplit);
   assert.equal(ws.getCell('R9').value,2);assert.equal(ws.getCell('R10').value,3);
   assert.equal(ws.getCell('L10').value,'-');assert.equal(ws.getCell('N10').value,'Chưa thấy lại');
   assert.equal(ws.getCell('U9').value,'a');assert.equal(ws.getCell('U10').value,'b');
