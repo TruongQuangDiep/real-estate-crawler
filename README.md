@@ -408,6 +408,8 @@ Trong `Chi_tiet_quy_can`, cột AC giữ thư mục riêng của căn; AF là th
 
 URL nguồn được giữ dạng văn bản để sao chép, ưu tiên hyperlink cho file/thư mục nội bộ. Bộ xuất giới hạn 60.000 hyperlink trên mỗi sheet để không vượt [giới hạn Excel](https://support.microsoft.com/en-us/excel/excel-specifications-and-limits); các URL vượt ngưỡng vẫn được giữ đầy đủ dưới dạng văn bản và ghi chú trong sheet hướng dẫn.
 
+Khi tổng giá nguồn dương nhưng dưới 1 triệu VNĐ, báo cáo coi giá đó là bất thường/chưa xác minh: không suy đoán hệ số triệu/tỷ, hiển thị `-` cho các giá tổng bất thường và đơn giá liên quan trong bảng chính, ghi chú chất lượng tại cột AJ. Số gốc vẫn giữ trong CSDL và sheet đối soát của các căn thuộc bảng chính. Đây không phải xác nhận rằng sàn không có giá. Mốc cào từng nguồn và trạng thái phiên Drive hết hạn được ghi rõ để tránh nhầm thời điểm xuất file với độ mới/độ đầy đủ của dữ liệu.
+
 Xuất báo cáo hiện tại bằng `npm run export:excel`. File được lưu trong `reports/` với hậu tố `_da_kiem_tra.xlsx`, theo ngày Việt Nam. Báo cáo gồm tổng quan, toàn bộ dự án, chi tiết căn, biến động quan sát được, hướng dẫn dữ liệu và trạng thái bảng tính giá trên Drive. Thư mục báo cáo và thông tin đăng nhập không đưa lên Git.
 
 - Danh sách dự án ghép danh mục `Project` với các căn đã lưu, ưu tiên ID theo từng sàn. Dự án có trong danh mục nhưng chưa có căn vẫn xuất hiện. Các ID chưa khớp danh mục được ghi rõ. Số căn 0 trong CSDL không tự động có nghĩa sàn đã hết hàng.

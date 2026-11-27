@@ -7,6 +7,10 @@ const { trackedBulkWrite, markMissing } = require('../src/services/inventoryHist
 const { buildExcelReport } = require('../src/services/excelService');
 const { getWeeklyPeriod } = require('../src/services/weeklyReportService');
 async function main() {
+  const {reportPrices}=require('../src/services/reportPrices');
+  const unverified=reportPrices({source:'salepro',price:1,raw_data:{price_per_meter:0.006}});
+  assert.equal(unverified.price,'-');assert.equal(unverified.unitPrice,'-');assert.ok(unverified.qualityNote);
+  assert.equal(reportPrices({source:'hisale',price:8172327510,raw_data:{priceAveFull:'71.1 triệu/m'}}).price,8172327510);
   const high = { source:'vhub',area_land:70,raw_data:{productType:'cao_tang',frontWidth:null} };
   assert.equal(fields(high).frontWidth,'');
   assert.equal(fields({...high,raw_data:{productType:'thap_tang',frontWidth:'5,5'}}).frontWidth,5.5);

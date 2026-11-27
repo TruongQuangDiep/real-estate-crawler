@@ -1,6 +1,7 @@
 const { extractExtendedFields } = require('./unitFields');
 const { addMovementSheets } = require('./inventoryReport');
 const {folderUrl: canonicalFolderUrl} = require('./driveLinks');
+const {reportPrices}=require('./reportPrices');
 const ExcelJS = require('exceljs');
 
 /**
@@ -120,7 +121,7 @@ async function buildExcelReport(units = [], options = {}) {
     }
 
     const row = sheet.addRow({
-      ...extractExtendedFields(unit),
+      ...reportPrices(unit),
       index: index + 1,
       source: (unit.source || '').toUpperCase(),
       project_name: unit.project_name || '',
@@ -132,8 +133,8 @@ async function buildExcelReport(units = [], options = {}) {
       direction: unit.direction || '',
       area_land: unit.area_land ? Number(unit.area_land) : null,
       area_build: unit.area_build ? Number(unit.area_build) : null,
-      price: unit.price ? Number(unit.price) : '-',
-      price_tts: unit.price_tts ? Number(unit.price_tts) : '-',
+      price: reportPrices(unit).price,
+      price_tts: reportPrices(unit).priceTts,
       status: unit.status || 'Còn hàng',
       delivery_standard: unit.delivery_standard || '',
       bank_support: unit.bank_support || '',

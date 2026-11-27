@@ -31,6 +31,7 @@ async function main(){
   const shared=lookup({source:'hisale',project_id:1,document_urls:['https://docs.google.com/spreadsheets/d/sheet-id/edit']});
   assert.equal(shared.folder,'');assert.equal(shared.projectFolder,'https://drive.google.com/drive/folders/project-folder');assert.equal(shared.files.length,1);
   assert.equal(resolveDriveLinks({drive_folder_id:'known'}).folder,'https://drive.google.com/drive/folders/known');
+  assert.equal(resolveDriveLinks({image_sync_status:'PROCESSING',image_sync_locked_until:new Date(0)}).status,'Chưa hoàn tất: phiên đồng bộ hết hạn');
   const retained=buildDriveIndex([],[{source_key:'sheet-id',status:'FAILED',drive_url:'https://drive.google.com/file/d/old-copy/view',error:'403'}])({document_urls:['https://docs.google.com/spreadsheets/d/sheet-id/edit']});
   assert.equal(retained.files.length,1);assert.equal(retained.error,'403');
   const dbName=`crawler_media_test_${process.pid}`;

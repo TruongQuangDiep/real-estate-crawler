@@ -7,6 +7,7 @@ const Unit = require('../models/Unit');
 const Project = require('../models/Project');
 const PricingDocument = require('../models/PricingDocument');
 const { buildDriveIndex } = require('../services/driveLinks');
+const {reportPrices}=require('../services/reportPrices');
 
 const { extractExtendedFields, segment } = require('../services/unitFields');
 const { buildProjectInventory, addMovementSheets } = require('../services/inventoryReport');
@@ -274,10 +275,11 @@ async function exportAll() {
     { header: 'File nội bộ (nếu có)', key: 'drive_file', width: 32 },
     { header: 'Tình trạng link/file Drive', key: 'drive_status', width: 52 },
     { header: 'Lỗi đồng bộ Drive', key: 'drive_error', width: 65 },
+    { header: 'Ghi chú chất lượng giá', key: 'price_quality', width: 65 },
   ];
 
   units.forEach((unit, index) => {
-    const ext = extractExtendedFields(unit);
+    const ext = reportPrices(unit);
     const drive = lookupDrive(unit);
 
     const row = detailSheet.addRow({
@@ -294,8 +296,9 @@ async function exportAll() {
       front_width: ext.frontWidth,
       area_land: unit.area_land ? Number(unit.area_land) : null,
       area_build: unit.area_build ? Number(unit.area_build) : null,
-      price: unit.price ? Number(unit.price) : '-',
-      price_tts: unit.price_tts ? Number(unit.price_tts) : (unit.raw_data?.price_tts ? Number(unit.raw_data.price_tts) : '-'),
+      price: ext.price,
+      price_tts: ext.priceTts,
+      price_quality: ext.qualityNote,
       price_loan: ext.priceLoan,
       price_tttd: ext.priceTttd,
       unit_price: ext.unitPrice,
@@ -319,7 +322,7 @@ async function exportAll() {
     });
     row.height=30;
     if (typeof ext.unitPrice === 'number' && ext.unitPrice < 1) row.getCell('unit_price').numFmt = '0.00000000';
-    for(const key of ['project_name','subdivision','unit_type','drive_status','drive_error']) row.getCell(key).alignment={wrapText:true,vertical:'middle'};
+    for(const key of ['project_name','subdivision','unit_type','drive_status','drive_error','price_quality']) row.getCell(key).alignment={wrapText:true,vertical:'middle'};
   });
 
   // Header styling for Sheet 2
@@ -368,7 +371,7 @@ async function exportAll() {
   });
 
   detailSheet.views = [{ state: 'frozen', ySplit: 1 }];
-  detailSheet.autoFilter = { from: 'A1', to: `AI${detailSheet.rowCount}` };
+  detailSheet.autoFilter = { from: 'A1', to: `AJ${detailSheet.rowCount}` };
 
   // ==================================================================
   // SHEET 3: TOÀN BỘ DỰ ÁN HỢP NHẤT (CÓ THỂ LỌC VÀ SORT TIỆN LỢI)
@@ -433,6 +436,15 @@ async function exportAll() {
   await addMovementSheets(workbook, allUnits);
   await require('../services/pricingDocuments').addDocumentSheet(workbook, units);
   require('../services/storedFilesReport').addStoredFilesSheet(workbook, units, lookupDrive);
+  const logs=await require('../models/CrawlLog').find({}).sort({started_at:-1}).limit(40).lean();
+  const seenSources=new Set();
+  const notes=workbook.getWorksheet('Huong_dan_du_lieu');
+  for(const log of logs) {
+    if(seenSources.has(log.source))continue;seenSources.add(log.source);
+    const time=log.finished_at?new Date(log.finished_at).toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'}):'chưa kết thúc';
+    const row=notes.addRow([`Lần cào ${log.source}`,`Kết thúc: ${time}; trạng thái: ${log.status}; số dòng quét: ${log.total_scanned || 0}. Thời điểm xuất Excel không phải thời điểm dữ liệu nguồn được cào.`]);
+    row.alignment={wrapText:true,vertical:'top'};row.height=45;
+  }
   require('../services/excelLinks').limitHyperlinks(workbook);
 
   const exportDir = path.resolve(process.env.REPORT_OUTPUT_DIR || path.join(__dirname, '../../reports'));
@@ -440,7 +452,8 @@ async function exportAll() {
     fs.mkdirSync(exportDir, { recursive: true });
   }
 
-  const fileName = `Bao_cao_so_lieu_quy_can_${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}_da_kiem_tra.xlsx`;
+  const tag=String(process.env.REPORT_FILE_TAG || 'da_kiem_tra').replace(/[^a-zA-Z0-9_-]/g,'') || 'da_kiem_tra';
+  const fileName = `Bao_cao_so_lieu_quy_can_${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}_${tag}.xlsx`;
   const filePath = path.join(exportDir, fileName);
 
   console.log('💾 Đang ghi file Excel ra đĩa...');

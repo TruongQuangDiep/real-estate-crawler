@@ -77,17 +77,17 @@ async function addMovementSheets(workbook, units = [], supplied) {
   notes.addRow(['Danh sách dự án', 'Bao gồm danh mục Project và dự án có căn chưa khớp danh mục. Số căn là số bản ghi đang lưu, không bảo đảm tồn kho thời gian thực. Dự án 0 bản ghi không mặc định là hết hàng. Không gộp dự án giữa các sàn.']);
   notes.addRow(['Trạng thái / phân khúc', 'Đang lock chỉ đếm lock/giữ chỗ; đã cọc/đã bán là trạng thái khác. Phân khúc chưa xác định không tự gán cao tầng.']);
   notes.addRow(['Drive bảng tính giá', 'Xem các link file đã sao lưu và trạng thái tài liệu. Có thư mục Drive không đồng nghĩa đã sao lưu toàn bộ bảng tính. Link nguồn không phải file Excel thì không tự tạo file thay thế.']);
-  const anomalies = units.filter(u => u.price > 0 && u.price < 1000000);
+  const anomalies = units.filter(u => u.listing_state !== 'missing' && u.price > 0 && u.price < 1000000);
   if (anomalies.length) {
-    notes.addRow(['Giá nguồn cần xác minh', `${anomalies.length} căn có tổng giá lớn hơn 0 nhưng nhỏ hơn 1 triệu VNĐ. Giữ nguyên giá nguồn; không nhân đổi đơn vị hay suy đoán giá thực tế. Xem sheet Can_xac_minh_gia.`]);
+    notes.addRow(['Giá nguồn cần xác minh', `${anomalies.length} bản ghi có tổng giá lớn hơn 0 nhưng nhỏ hơn 1 triệu VNĐ. Đây là giá chưa xác minh: các giá tổng bất thường và đơn giá liên quan hiển thị - trong bảng chính. Số gốc giữ nguyên trong CSDL và Can_xac_minh_gia, không nhân đổi đơn vị hay suy đoán giá thực tế.`]);
     const quality = workbook.addWorksheet('Can_xac_minh_gia');
-    quality.columns = [['Nguồn','source',14],['Dự án','project_name',40],['Mã căn','unit_code',25],['Giá nguồn (VNĐ)','price',24],['Ghi chú','note',85]].map(([header,key,width])=>({header,key,width}));
+    quality.columns = [['Nguồn','source',14],['Dự án','project_name',40],['Mã căn','unit_code',25],['Giá gốc chưa xác minh (VNĐ)','price',32],['Ghi chú','note',85]].map(([header,key,width])=>({header,key,width}));
     for (const u of anomalies) {
       const row = quality.addRow({...u,note:'Tổng giá nguồn nhỏ hơn 1 triệu VNĐ; có thể là giá tạm/thiếu dữ liệu. Cần kiểm tra sàn trước khi sử dụng.'});
       row.height = 32; row.alignment = {wrapText:true,vertical:'middle'};
     }
     quality.getColumn('price').numFmt='#,##0';quality.autoFilter=`A1:E${quality.rowCount}`;quality.views=[{state:'frozen',ySplit:1}];
-    quality.getRow(1).font={bold:true};quality.getRow(1).height=30;
+    quality.getRow(1).font={bold:true};quality.getRow(1).height=32;quality.getRow(1).alignment={wrapText:true,vertical:'middle'};
   }
   for (const sheet of [ws,notes]) { sheet.getRow(1).font={bold:true,color:{argb:'FFFFFFFF'}};sheet.getRow(1).fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1E3A8A'}};sheet.getRow(1).height=32; }
   notes.eachRow((row,n)=>{if(n>1){row.alignment={wrapText:true,vertical:'top'};row.height=60;}});

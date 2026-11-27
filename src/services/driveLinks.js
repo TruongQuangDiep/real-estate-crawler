@@ -6,13 +6,14 @@ function resolveDriveLinks(unit, project) {
   const own = folderUrl(unit), shared = project ? folderUrl(project) : '';
   const files = [...new Set((unit.stored_images || []).map(f => f.drive_url || (f.drive_file_id ? `https://drive.google.com/file/d/${f.drive_file_id}/view` : '')).filter(Boolean))];
   const hasSources = (unit.image_urls || []).length || (unit.document_urls || []).length || /drive\.google\.com|docs\.google\.com/i.test(unit.price_list_url || '');
-  const error = unit.image_sync_error || '';
+  const expired=unit.image_sync_status==='PROCESSING'&&unit.image_sync_locked_until&&new Date(unit.image_sync_locked_until)<new Date();
+  const error = [unit.image_sync_error,expired?'Phiên đồng bộ đã hết hạn khóa; chưa hoàn tất, không phải đang chạy.':''].filter(Boolean).join('; ');
   const status = own ? (error ? 'Có thư mục; còn lỗi tải file' : `Có thư mục; ${unit.image_sync_status || 'chưa rõ trạng thái file'}`)
     : files.length ? 'Có file nội bộ; chưa có link thư mục căn'
     : shared ? 'Chỉ có thư mục dự án dùng chung'
     : error ? 'Lỗi đồng bộ; xem ghi chú'
     : hasSources ? 'Chưa đồng bộ hoặc chưa lấy được file nguồn' : 'Nguồn chưa có ảnh/file để lưu';
-  return {folder:own,projectFolder:shared,files,status,error};
+  return {folder:own,projectFolder:shared,files,status:expired?'Chưa hoàn tất: phiên đồng bộ hết hạn':status,error};
 }
 function buildDriveIndex(projects = [], documents = []) {
   const byId=new Map(projects.map(p=>[`${p.source}|${p.project_id}`,p]));
