@@ -265,6 +265,9 @@ async function exportAll() {
     { header: 'VHub - Quỹ độc quyền', key: 'vhub_quy_doc_quyen', width: 22 },
     { header: 'VHub - Quỹ chung (QCK)', key: 'vhub_quy_chung', width: 22 },
     { header: 'VHub - Quỹ chéo', key: 'vhub_quy_cheo', width: 18 },
+    { header: 'SalePro - Quỹ Độc quyền + Ẩn', key: 'salepro_quy_doc_quyen_an', width: 30 },
+    { header: 'SalePro - Quỹ chéo', key: 'salepro_quy_cheo', width: 22 },
+    { header: 'SalePro - Quỹ thưởng', key: 'salepro_quy_thuong', width: 24 },
     { header: 'Tiêu chuẩn bàn giao', key: 'delivery_standard', width: 24 },
     { header: 'Hỗ trợ ngân hàng', key: 'bank_support', width: 22 },
     { header: 'Link bảng giá web nguồn (Sàn ngoài)', key: 'price_list_url', width: 45 },
@@ -276,9 +279,6 @@ async function exportAll() {
     { header: 'Tình trạng link/file Drive', key: 'drive_status', width: 52 },
     { header: 'Lỗi đồng bộ Drive', key: 'drive_error', width: 65 },
     { header: 'Ghi chú chất lượng giá', key: 'price_quality', width: 65 },
-    { header: 'SalePro - Quỹ Độc quyền + Ẩn', key: 'salepro_quy_doc_quyen_an', width: 30 },
-    { header: 'SalePro - Quỹ chéo', key: 'salepro_quy_cheo', width: 22 },
-    { header: 'SalePro - Quỹ thưởng', key: 'salepro_quy_thuong', width: 24 },
   ];
 
   units.forEach((unit, index) => {
@@ -347,7 +347,7 @@ async function exportAll() {
     } else if (c >= 23 && c <= 25) {
       // Nhóm Quỹ VHub
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF059669' } };
-    } else if (c >= 37 && c <= 39) {
+    } else if (c >= 26 && c <= 28) {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD97706' } };
     } else {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
