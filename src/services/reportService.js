@@ -1,3 +1,4 @@
+const { movementNotice } = require('./inventoryReport');
 /**
  * Service xây dựng nội dung email báo cáo định kỳ (HTML template)
  * Tối ưu hiển thị responsive, giao diện chuẩn doanh nghiệp (Executive / SaaS style).
@@ -21,7 +22,7 @@ function formatPriceVnd(price) {
   return `${num.toLocaleString('vi-VN')} đ`;
 }
 
-function buildDailyReport({ stats = [], units = [], generatedAt = new Date() }) {
+function buildDailyReport({ stats = [], units = [], generatedAt = new Date(), movements }) {
   const maxPreview = Math.max(1, Number(process.env.MAIL_MAX_PREVIEW_UNITS) || 15);
   const totalScanned = stats.reduce((sum, s) => sum + (s.totalScanned || 0), 0);
   const totalNewInRun = stats.reduce((sum, s) => sum + (s.newUnitsCount || 0), 0);
@@ -91,9 +92,9 @@ function buildDailyReport({ stats = [], units = [], generatedAt = new Date() }) 
   const previewUnits = units.slice(0, maxPreview);
   const unitRows = previewUnits
     .map((u, index) => {
-      const isHiSale = (u.source || '').toLowerCase() === 'hisale';
-      const sourceBg = isHiSale ? '#e0f2fe' : '#ffedd5';
-      const sourceColor = isHiSale ? '#0369a1' : '#c2410c';
+      const srcLower = (u.source || '').toLowerCase();
+      const sourceBg = srcLower === 'hisale' ? '#e0f2fe' : srcLower === 'vhub' ? '#dcfce7' : '#ffedd5';
+      const sourceColor = srcLower === 'hisale' ? '#0369a1' : srcLower === 'vhub' ? '#15803d' : '#c2410c';
 
       const locationParts = [];
       if (u.subdivision) locationParts.push(u.subdivision);
@@ -189,7 +190,7 @@ function buildDailyReport({ stats = [], units = [], generatedAt = new Date() }) 
       <div>
         <div style="font-weight: 700; color: #166534; font-size: 13px;">Báo cáo chi tiết: Bao_cao_ro_hang_${dateStr.replace(/\//g, '-')}.xlsx</div>
         <div style="font-size: 12px; color: #15803d; margin-top: 2px;">
-          Chứa đầy đủ <strong>${units.length}</strong> căn mới với 18 cột dữ liệu (diện tích, giá TTS, tiêu chuẩn bàn giao, link trực tiếp...). Vui lòng tải file đính kèm để xem chi tiết.
+          Chứa đầy đủ <strong>${units.length}</strong> căn mới với 37 cột dữ liệu (diện tích, giá TTS, tiêu chuẩn bàn giao, link trực tiếp...). Vui lòng tải file đính kèm để xem chi tiết.
         </div>
       </div>
     </div>
@@ -221,6 +222,7 @@ function buildDailyReport({ stats = [], units = [], generatedAt = new Date() }) 
     </div>
 
     <!-- BODY CONTAINER -->
+    ${movements ? `<div style="padding:16px 28px"><strong>Bi?n ??ng quan s?t ???c:</strong> ${movements.summary.newUnits} c?n m?i, ${movements.summary.priceChanged} c?n ??i gi?, ${movements.summary.sold} c?n chuy?n ?? b?n, ${movements.summary.statusChanged} c?n ??i tr?ng th?i; ${movements.summary.removed || 0} rời rổ, ${movements.summary.relisted || 0} xuất hiện lại.<p>${escapeHtml(movementNotice(movements))}</p></div>` : ''}
     <div style="padding: 24px 28px;">
       
       <!-- KPI STAT CARDS -->

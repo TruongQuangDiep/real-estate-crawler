@@ -49,9 +49,9 @@ async function runTests() {
   console.log('  ✅ Test 1 PASSED: Schemas đầy đủ 100% trường dữ liệu theo chuẩn V3.1.\n');
 
   // =========================================================================
-  // Test 2: Báo cáo Excel chuẩn 26 cột V3.1 (Đầy đủ tiêu đề & wrapText)
+  // Test 2: Báo cáo Excel chuẩn 37 cột V3.1 (Đầy đủ tiêu đề & wrapText)
   // =========================================================================
-  console.log('Test 2: Kiểm tra tạo file Excel đúng chuẩn 26 cột và tiêu đề V3.1...');
+  console.log('Test 2: Kiểm tra tạo file Excel đúng chuẩn 37 cột và tiêu đề V3.1...');
   const sampleUnits = [
     {
       source: 'salepro',
@@ -119,10 +119,10 @@ async function runTests() {
   await workbook.xlsx.load(excelBuffer);
   const sheet = workbook.getWorksheet(1);
 
-  assert.strictEqual(sheet.columns.length, 26, `File Excel phải có đúng 26 cột (hiện có: ${sheet.columns.length})`);
+  assert.strictEqual(sheet.columns.length, 37, `File Excel phải có đúng 37 cột (hiện có: ${sheet.columns.length})`);
 
   const headers = sheet.getRow(1).values.filter(Boolean);
-  assert.strictEqual(headers.length, 26, 'Hàng tiêu đề phải có đúng 26 cột');
+  assert.strictEqual(headers.length, 37, 'Hàng tiêu đề phải có đúng 37 cột');
   assert.strictEqual(headers[0], 'STT');
   assert.strictEqual(headers[1], 'Nguồn');
   assert.strictEqual(headers[18], 'Hình ảnh riêng của căn — Google Drive');
@@ -134,7 +134,7 @@ async function runTests() {
   assert.strictEqual(headers[24], 'Tài liệu liên quan');
   assert.strictEqual(headers[25], 'Trạng thái đồng bộ hình ảnh');
 
-  console.log(`  ✅ Test 2 PASSED: Đã xác thực đúng 26 cột, tiêu đề chuẩn V3.1 và hyperlink Drive.\n`);
+  console.log(`  ✅ Test 2 PASSED: Đã xác thực đúng 37 cột, tiêu đề chuẩn V3.1 và hyperlink Drive.\n`);
 
   // =========================================================================
   // Test 3: Thuật toán đối chiếu Layout đa tiêu chí (V3.1 Layout Matching)

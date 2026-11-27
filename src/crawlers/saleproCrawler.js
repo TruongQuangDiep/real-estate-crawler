@@ -1,3 +1,4 @@
+const { trackedBulkWrite, markMissing } = require('../services/inventoryHistory');
 const axios = require('axios');
 const Unit = require('../models/Unit');
 const Project = require('../models/Project');
@@ -78,7 +79,7 @@ async function saveUnitBulkOps(bulkOps) {
 
   for (let i = 0; i < bulkOps.length; i += CHUNK_SIZE) {
     const chunk = bulkOps.slice(i, i + CHUNK_SIZE);
-    const bulkResult = await Unit.bulkWrite(chunk, { ordered: false });
+    const bulkResult = await trackedBulkWrite(Unit, chunk, { ordered: false });
     totalNew += bulkResult.upsertedCount || 0;
     totalMod += bulkResult.modifiedCount || 0;
   }
@@ -191,6 +192,7 @@ async function fetchAllSaleProProjects(sessionHolderOrClient) {
  * Cào 1 dự án thấp tầng (low_rise) qua API Quỹ Căn: /search_tindang_low_rise_data/
  */
 async function crawlSaleProLowRise(client, projectId, isInitialSync, projectMeta = {}) {
+  const scanStartedAt = new Date();
   let currentPage = 1;
   const limit = 100;
   let totalRecords = 0;
@@ -213,7 +215,7 @@ async function crawlSaleProLowRise(client, projectId, isInitialSync, projectMeta
     }
 
     if (!res.data || res.data.code !== 1 || !Array.isArray(res.data.data)) {
-      break;
+      throw new Error('Invalid SalePro inventory response');
     }
 
     const units = res.data.data;
@@ -232,7 +234,9 @@ async function crawlSaleProLowRise(client, projectId, isInitialSync, projectMeta
     await sleep(200);
   }
 
+  if (allUnits.length < totalRecords) throw new Error('Incomplete SalePro pagination');
   if (allUnits.length === 0) {
+    await markMissing(Unit, {source:'salepro',project_id:{$in:[projectId,String(projectId)]},'raw_data.project_type':{$ne:'high_rise'}},scanStartedAt);
     return null;
   }
 
@@ -283,6 +287,7 @@ async function crawlSaleProLowRise(client, projectId, isInitialSync, projectMeta
   });
 
   const { totalNew, totalMod } = await saveUnitBulkOps(bulkOps);
+  await markMissing(Unit, {source:'salepro',project_id:{$in:[projectId,String(projectId)]},'raw_data.project_type':{$ne:'high_rise'}},scanStartedAt);
 
   return {
     totalScanned: allUnits.length,

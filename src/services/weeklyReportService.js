@@ -1,3 +1,5 @@
+const { getMovements, movementNotice } = require('./inventoryReport');
+const { segment } = require('./unitFields');
 const nodemailer = require('nodemailer');
 const Unit = require('../models/Unit');
 const Project = require('../models/Project');
@@ -10,30 +12,19 @@ const { escapeHtml, formatPriceVnd } = require('./reportService');
  * Tính toán mốc thời gian 7 ngày của tuần trước (từ 00:00 Thứ Hai tuần trước đến 00:00 Thứ Hai tuần này)
  */
 function getWeeklyPeriod(targetDate = new Date()) {
-  const d = new Date(targetDate);
-  // Xác định ngày trong tuần (0: Chủ Nhật, 1: Thứ Hai, ..., 6: Thứ Bảy)
-  const day = d.getDay();
-  // Khoảng cách tới Thứ Hai tuần này
-  const diffToCurrentMonday = (day === 0 ? -6 : 1) - day;
-  
-  const currentMonday = new Date(d);
-  currentMonday.setDate(d.getDate() + diffToCurrentMonday);
-  currentMonday.setHours(0, 0, 0, 0);
+  const offset = 7 * 3600000;
+  const local = new Date(new Date(targetDate).getTime() + offset);
+  const day = local.getUTCDay() || 7;
+  const currentMondayLocal = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() - day + 1);
+  const previousMondayLocal = currentMondayLocal - 7 * 86400000;
+  const thursday = new Date(previousMondayLocal + 3 * 86400000);
+  const year = thursday.getUTCFullYear();
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const week1Monday = jan4.getTime() - ((jan4.getUTCDay() || 7) - 1) * 86400000;
+  const week = 1 + Math.round((previousMondayLocal - week1Monday) / (7 * 86400000));
+  return { periodStart: new Date(previousMondayLocal - offset), periodEnd: new Date(currentMondayLocal - offset),
+    periodKey: `${year}-W${String(week).padStart(2, '0')}` };
 
-  const prevMonday = new Date(currentMonday);
-  prevMonday.setDate(currentMonday.getDate() - 7);
-
-  // Khóa định danh tuần, ví dụ: 2026-W47
-  const year = prevMonday.getFullYear();
-  const firstJan = new Date(year, 0, 1);
-  const weekNum = Math.ceil(((prevMonday - firstJan) / 86400000 + firstJan.getDay() + 1) / 7);
-  const periodKey = `${year}-W${String(weekNum).padStart(2, '0')}`;
-
-  return {
-    periodStart: prevMonday,
-    periodEnd: currentMonday,
-    periodKey,
-  };
 }
 
 /**
@@ -48,18 +39,19 @@ function buildWeeklyReportHtml({
   crawlStats = {},
   mediaStats = {},
   unitsByType = {},
+  movements,
 }) {
   const dateOpts = { timeZone: process.env.CRON_TIMEZONE || 'Asia/Ho_Chi_Minh' };
   const startStr = periodStart.toLocaleDateString('vi-VN', dateOpts);
   const endStr = periodEnd.toLocaleDateString('vi-VN', dateOpts);
 
   // Bảng dự án nổi bật
-  const projectRows = topProjects.slice(0, 8).map((p, idx) => `
+  const projectRows = topProjects.map((p, idx) => `
     <tr style="border-bottom: 1px solid #f1f5f9;">
       <td style="padding: 10px 14px; text-align: center; color: #64748b; font-weight: 600;">${idx + 1}</td>
       <td style="padding: 10px 14px; font-weight: 600; color: #1e293b;">${escapeHtml(p.name)}</td>
       <td style="padding: 10px 14px; text-align: center;">
-        <span style="background-color: ${p.source === 'hisale' ? '#e0f2fe' : '#ffedd5'}; color: ${p.source === 'hisale' ? '#0369a1' : '#c2410c'}; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 700;">
+        <span style="background-color: ${p.source === 'hisale' ? '#e0f2fe' : p.source === 'vhub' ? '#dcfce7' : '#ffedd5'}; color: ${p.source === 'hisale' ? '#0369a1' : p.source === 'vhub' ? '#15803d' : '#c2410c'}; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 700;">
           ${escapeHtml(p.source.toUpperCase())}
         </span>
       </td>
@@ -92,6 +84,7 @@ function buildWeeklyReportHtml({
     </div>
 
     <!-- BODY CONTAINER -->
+    ${movements ? `<div style="padding:16px 28px"><strong>Bi?n ??ng quan s?t ???c:</strong> ${movements.summary.newUnits} c?n m?i, ${movements.summary.priceChanged} c?n ??i gi?, ${movements.summary.sold} c?n chuy?n ?? b?n, ${movements.summary.statusChanged} c?n ??i tr?ng th?i; ${movements.summary.removed || 0} rời rổ, ${movements.summary.relisted || 0} xuất hiện lại.<p>${escapeHtml(movementNotice(movements))}</p></div>` : ''}
     <div style="padding: 24px 28px;">
       
       <!-- KPI STAT CARDS -->
@@ -146,6 +139,12 @@ function buildWeeklyReportHtml({
             <td style="padding: 10px 14px; text-align: center;">${(unitsBySource.saleproHigh || 0).toLocaleString('vi-VN')}</td>
             <td style="padding: 10px 14px; text-align: center; font-weight: bold; color: #dc2626;">+${(unitsBySource.salepro || 0).toLocaleString('vi-VN')}</td>
           </tr>
+          <tr style="border-bottom: 1px solid #f1f5f9;">
+            <td style="padding: 10px 14px; font-weight: 600; color: #15803d;">VHUB</td>
+            <td style="padding: 10px 14px; text-align: center;">${(unitsBySource.vhubLow || 0).toLocaleString('vi-VN')}</td>
+            <td style="padding: 10px 14px; text-align: center;">${(unitsBySource.vhubHigh || 0).toLocaleString('vi-VN')}</td>
+            <td style="padding: 10px 14px; text-align: center; font-weight: bold; color: #dc2626;">+${(unitsBySource.vhub || 0).toLocaleString('vi-VN')}</td>
+          </tr>
         </tbody>
       </table>
 
@@ -191,10 +190,10 @@ function buildWeeklyReportHtml({
       <!-- EXCEL ATTACHMENT CALLOUT -->
       <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 14px 18px; margin-bottom: 10px;">
         <div style="font-weight: 700; color: #1e40af; font-size: 13px; margin-bottom: 4px;">
-          📎 ĐÃ ĐÍNH KÈM FILE EXCEL TỔNG HỢP 24 CỘT CHI TIẾT
+          📎 ĐÃ ĐÍNH KÈM FILE EXCEL TỔNG HỢP 37 CỘT CHI TIẾT
         </div>
         <div style="font-size: 12px; color: #1d4ed8; line-height: 1.4;">
-          File Excel tổng hợp toàn bộ <strong>${totalUnits.toLocaleString('vi-VN')} căn mới</strong> trong tuần, bao gồm đầy đủ 24 cột thông số, link hình ảnh Google Drive riêng của căn, ảnh dự án, layout và hyperlink mở trực tiếp thư mục Drive.
+          File Excel tổng hợp toàn bộ <strong>${totalUnits.toLocaleString('vi-VN')} căn mới</strong> trong tuần, bao gồm đầy đủ 37 cột thông số, link hình ảnh Google Drive riêng của căn, ảnh dự án, layout và hyperlink mở trực tiếp thư mục Drive.
         </div>
       </div>
 
@@ -300,10 +299,13 @@ async function sendWeeklyReport(options = {}) {
   const unitsBySource = {
     hisale: newUnits.filter((u) => u.source === 'hisale').length,
     salepro: newUnits.filter((u) => u.source === 'salepro').length,
-    hisaleLow: newUnits.filter((u) => u.source === 'hisale' && !u.floor).length,
-    hisaleHigh: newUnits.filter((u) => u.source === 'hisale' && u.floor).length,
-    saleproLow: newUnits.filter((u) => u.source === 'salepro' && !u.floor).length,
-    saleproHigh: newUnits.filter((u) => u.source === 'salepro' && u.floor).length,
+    vhub: newUnits.filter((u) => u.source === 'vhub').length,
+    hisaleLow: newUnits.filter((u) => u.source === 'hisale' && segment(u) === 'low_rise').length,
+    hisaleHigh: newUnits.filter((u) => u.source === 'hisale' && segment(u) === 'high_rise').length,
+    saleproLow: newUnits.filter((u) => u.source === 'salepro' && segment(u) === 'low_rise').length,
+    saleproHigh: newUnits.filter((u) => u.source === 'salepro' && segment(u) === 'high_rise').length,
+    vhubLow: newUnits.filter((u) => u.source === 'vhub' && segment(u) === 'low_rise').length,
+    vhubHigh: newUnits.filter((u) => u.source === 'vhub' && segment(u) === 'high_rise').length,
   };
 
   // Thống kê theo dự án
@@ -343,8 +345,9 @@ async function sendWeeklyReport(options = {}) {
     noImage: newUnits.filter((u) => u.image_sync_status === 'NO_IMAGE').length,
   };
 
-  // 4. Tạo file Excel 24 cột đính kèm
-  const excelBuffer = await buildExcelReport(newUnits, { sheetTitle: 'Báo cáo tuần' });
+  // 4. Tạo file Excel 37 cột đính kèm
+  const movements = isTest ? { rows: [], summary: {newUnits:0,priceChanged:0,sold:0,statusChanged:0}, start:periodStart,end:periodEnd,trackingStartedAt:null } : await getMovements(periodStart, periodEnd);
+  const excelBuffer = await buildExcelReport(newUnits, { movements, sheetTitle: 'Báo cáo tuần' });
   const dateTag = periodStart.toISOString().slice(0, 10).replace(/-/g, '');
   const excelFileName = `Bao_Cao_Tuan_BDS_${periodKey}_${dateTag}.xlsx`;
 
@@ -357,6 +360,7 @@ async function sendWeeklyReport(options = {}) {
     topProjects,
     crawlStats,
     mediaStats,
+    movements,
   });
 
   // 6. Gửi email qua SMTP
@@ -412,6 +416,7 @@ async function sendWeeklyReport(options = {}) {
           unitsBySource,
           crawlStats,
           mediaStats,
+          movements: movements.summary,
         },
         recipients: mailTo.split(',').map((e) => e.trim()),
         excel_file_name: excelFileName,

@@ -5,9 +5,11 @@ const { connectDB } = require('./db');
 const { crawlAllHisaleProjects } = require('./crawlers/hisaleCrawler');
 const { crawlAllSaleProProjects } = require('./crawlers/saleproCrawler');
 const { crawlAllSaleProHighRiseProjects } = require('./crawlers/saleproHighRiseCrawler');
+const { crawlAllVhubProjects } = require('./crawlers/vhubCrawler');
 const { sendNotificationEmail, sendErrorAlert } = require('./mailer');
 const CrawlLog = require('./models/CrawlLog');
 const ReportLog = require('./models/ReportLog');
+const { syncPricingDocuments } = require('./services/pricingDocuments');
 const { sendWeeklyReport } = require('./services/weeklyReportService');
 const { syncPendingImages, syncPendingProjectMedia } = require('./services/imageStorageService');
 const { withLock } = require('./services/lockService');
@@ -118,6 +120,12 @@ async function runJob(isInitialSync = false, targetSource = null, shouldSendMail
       stats.push(saleproHighResult);
     }
 
+    // 3.5 CÀO VHUB 360
+    if (!targetSource || targetSource === 'vhub') {
+      const vhubResult = await runCrawlerForSource('VHub', crawlAllVhubProjects, isInitialSync);
+      stats.push(vhubResult);
+    }
+
     // 4. BÁO CÁO QUA EMAIL & EXCEL
     const failedStats = stats.filter((s) => s.status === 'FAILED');
     const hasError = failedStats.length > 0;
@@ -214,7 +222,7 @@ async function runDailyReportDigest(isForced = false) {
       .sort({ started_at: -1 })
       .lean();
 
-    const targetSources = ['HiSale', 'SalePro Thấp tầng', 'SalePro Cao tầng'];
+    const targetSources = ['HiSale', 'SalePro Thấp tầng', 'SalePro Cao tầng', 'VHub'];
     const stats = [];
 
     for (const src of targetSources) {
@@ -272,23 +280,23 @@ async function main() {
   const isWeekly = args.includes('--weekly') || args.includes('--report-weekly');
   const isSyncImages = args.includes('--sync-images') || args.includes('--images-sync');
 
-  // Lọc nguồn: --source=salepro hoặc --source=hisale
+  // Lọc nguồn: --source=salepro, --source=hisale hoặc --source=vhub
   let targetSource = null;
   const sourceArg = args.find((a) => a.startsWith('--source='));
   if (sourceArg) {
     targetSource = sourceArg.split('=')[1].toLowerCase();
-    if (!['hisale', 'salepro'].includes(targetSource)) {
-      throw new Error(`Nguồn dữ liệu không hợp lệ: [${targetSource}]. Chỉ chấp nhận 'hisale' hoặc 'salepro'.`);
+    if (!['hisale', 'salepro', 'vhub'].includes(targetSource)) {
+      throw new Error(`Nguồn dữ liệu không hợp lệ: [${targetSource}]. Chỉ chấp nhận 'hisale', 'salepro' hoặc 'vhub'.`);
     }
   }
 
   if (isInit) {
-    console.log(`[Runner] Chế độ --init: Khởi tạo dữ liệu ${targetSource ? `cho [${targetSource}]` : 'cho CẢ 2 NGUỒN'}...`);
+    console.log(`[Runner] Chế độ --init: Khởi tạo dữ liệu ${targetSource ? `cho [${targetSource}]` : 'cho TẤT CẢ CÁC NGUỒN'}...`);
     const success = await runJob(true, targetSource, false);
     await mongoose.disconnect();
     process.exit(success ? 0 : 1);
   } else if (isNow) {
-    console.log(`[Runner] Chế độ --now: Quét ngay lập tức ${targetSource ? `cho [${targetSource}]` : 'cho CẢ 2 NGUỒN'} và tạo báo cáo...`);
+    console.log(`[Runner] Chế độ --now: Quét ngay lập tức ${targetSource ? `cho [${targetSource}]` : 'cho TẤT CẢ CÁC NGUỒN'} và tạo báo cáo...`);
     const success = await runJob(false, targetSource, true);
     await mongoose.disconnect();
     process.exit(success ? 0 : 1);
@@ -381,6 +389,14 @@ async function main() {
         },
         { timezone }
       );
+    }
+
+    // Pricing spreadsheets: daily incremental backup, no email is sent by this job.
+    if (imageSyncEnabled) {
+      cron.schedule('0 4 * * *', async () => {
+        try { await withLock('PRICING_DOCUMENT_SYNC', () => syncPricingDocuments()); }
+        catch (error) { console.error('[PricingDocuments]', error.message); }
+      }, { timezone });
     }
 
     // 4. Lịch đồng bộ hình ảnh căn riêng Google Drive

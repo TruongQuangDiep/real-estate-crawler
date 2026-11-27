@@ -1,16 +1,16 @@
 const mongoose = require('mongoose');
 
 const projectSchema = new mongoose.Schema({
-  // Nguồn dữ liệu: 'hisale' hoặc 'salepro'
+  // Nguồn dữ liệu: 'hisale', 'salepro' hoặc 'vhub'
   source: {
     type: String,
     required: true,
-    enum: ['hisale', 'salepro'],
+    enum: ['hisale', 'salepro', 'vhub'],
     index: true
   },
-  // ID dự án trên web nguồn
+  // ID dự án trên web nguồn (Number cho HiSale/SalePro, String slug cho VHub)
   project_id: {
-    type: Number,
+    type: mongoose.Schema.Types.Mixed,
     required: true
   },
   project_code: {

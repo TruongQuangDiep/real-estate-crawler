@@ -15,7 +15,7 @@ function parseArgs() {
       limit = Number(arg.split('=')[1]);
     } else if (/^\d+$/.test(arg)) {
       limit = Number(arg);
-    } else if (arg.toLowerCase() === 'hisale' || arg.toLowerCase() === 'salepro') {
+    } else if (['hisale', 'salepro', 'vhub'].includes(arg.toLowerCase())) {
       source = arg.toLowerCase();
     }
   }
@@ -28,8 +28,41 @@ async function main() {
 
   const { source, limit } = parseArgs();
 
+  let isTerminating = false;
+  process.on('SIGINT', () => {
+    console.log('\n🛑 Nhận tín hiệu dừng (Ctrl+C). Đang hoàn tất batch hiện tại trước khi thoát...');
+    isTerminating = true;
+  });
+
   try {
-    await syncPendingImages({ source, limit });
+    if (limit) {
+      await syncPendingImages({ source, limit });
+    } else {
+      let batchNumber = 0;
+      let totalProcessed = 0;
+      let totalSuccess = 0;
+      const batchSize = Number(process.env.IMAGE_SYNC_BATCH_SIZE || 20);
+
+      console.log(`\n====================================================================`);
+      console.log(`🚀 [CONTINUOUS SYNC] ĐỒNG BỘ LIÊN TỤC TOÀN BỘ QUỸ CĂN (${source.toUpperCase()})`);
+      console.log(`   - Kích thước mỗi batch: ${batchSize} căn`);
+      console.log(`   - Tiến độ được cập nhật liên tục vào CSDL & Google Drive`);
+      console.log(`   - Nhấn Ctrl+C bất cứ lúc nào để dừng an toàn`);
+      console.log(`====================================================================\n`);
+
+      while (!isTerminating) {
+        batchNumber++;
+        console.log(`\n--- [Batch #${batchNumber}] Đang lấy ${batchSize} căn tiếp theo... ---`);
+        const res = await syncPendingImages({ source, limit: batchSize });
+        if (!res || res.total === 0) {
+          console.log('\n🎉 Đã đồng bộ hoàn tất toàn bộ quỹ căn (không còn căn nào chờ xử lý)!');
+          break;
+        }
+        totalProcessed += res.total || 0;
+        totalSuccess += res.success || 0;
+        console.log(`📈 Tiến độ phiên hiện tại: Đã xử lý ${totalProcessed} căn (Thành công: ${totalSuccess} căn)`);
+      }
+    }
   } catch (err) {
     console.error('[Sync Script] ❌ Lỗi:', err.message);
   } finally {

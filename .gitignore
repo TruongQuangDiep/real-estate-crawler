@@ -4,6 +4,7 @@ node_modules/
 # Authentication session caches
 .hisale_session.json
 .salepro_session.json
+.vhub_session.json
 
 # Environment files & Secret credentials
 .env

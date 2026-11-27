@@ -42,12 +42,29 @@ async function main() {
   const hisalePendingUnits = await Unit.countDocuments({
     source: 'hisale',
     'image_urls.0': { $exists: true },
-    image_sync_status: { $nin: ['SUCCESS', 'NO_IMAGE'] }
+    $or: [
+      { image_sync_status: { $nin: ['SUCCESS', 'NO_IMAGE', 'FAILED'] } },
+      { image_sync_status: 'FAILED', image_sync_retries: { $lt: 3 } },
+    ]
+  });
+
+  const vhubTotalUnitsWithImg = await Unit.countDocuments({
+    source: 'vhub',
+    'image_urls.0': { $exists: true }
+  });
+  const vhubPendingUnits = await Unit.countDocuments({
+    source: 'vhub',
+    'image_urls.0': { $exists: true },
+    $or: [
+      { image_sync_status: { $nin: ['SUCCESS', 'NO_IMAGE', 'FAILED'] } },
+      { image_sync_status: 'FAILED', image_sync_retries: { $lt: 3 } },
+    ]
   });
 
   console.log(`📊 [CSDL MONGODB HIỆN TẠI]:`);
   console.log(`   - SalePro: Tổng ${saleproTotalProjects} dự án (Cần xử lý: ${saleproPendingProjects} dự án)`);
   console.log(`   - HiSale:  Tổng ${hisaleTotalUnitsWithImg} căn có ảnh (Cần xử lý: ${hisalePendingUnits} căn)`);
+  console.log(`   - VHub:    Tổng ${vhubTotalUnitsWithImg} căn có ảnh trực tiếp (Cần xử lý: ${vhubPendingUnits} căn)`);
   console.log('--------------------------------------------------------------------\n');
 
   // ==================================================================
@@ -89,39 +106,48 @@ async function main() {
     console.log(`✅ [BƯỚC 1/2] Tất cả ${saleproTotalProjects} dự án SalePro đã được đồng bộ đầy đủ lên Google Drive trước đó.`);
   }
 
+  async function syncUnitsInBatches(sourceKey, displayName, pendingCount, stepLabel) {
+    if (pendingCount > 0 && !isTerminating) {
+      console.log(`\n▶️ [${stepLabel}] BẮT ĐẦU ĐỒNG BỘ TOÀN BỘ CĂN ${displayName.toUpperCase()} CÓ ẢNH...`);
+      const batchSize = Number(process.env.IMAGE_SYNC_BATCH_SIZE || 20);
+      let batchIndex = 0;
+      let totalProcessed = 0;
+      let totalSuccess = 0;
+
+      while (!isTerminating) {
+        batchIndex++;
+        console.log(`\n--- [Batch #${batchIndex}] Đang xử lý ${batchSize} căn tiếp theo... ---`);
+        try {
+          const result = await syncPendingImages({ source: sourceKey, limit: batchSize });
+          if (!result || result.total === 0 || result.enabled === false) {
+            console.log(`✨ Đã hoàn tất toàn bộ căn ${displayName}!`);
+            break;
+          }
+
+          totalProcessed += result.total || 0;
+          totalSuccess += result.success || 0;
+          console.log(`✅ Hoàn thành batch #${batchIndex}: Thành công ${result.success}/${result.total} căn.`);
+        } catch (err) {
+          console.error(`❌ Lỗi batch #${batchIndex}:`, err.message);
+          break;
+        }
+      }
+
+      console.log(`\n🏁 Đã xử lý ${totalProcessed} căn ${displayName} (Thành công ${totalSuccess} căn).`);
+    } else if (pendingCount === 0) {
+      console.log(`✅ [${stepLabel}] Toàn bộ căn ${displayName} có ảnh đã được tải lên Google Drive từ trước.`);
+    }
+  }
+
   // ==================================================================
   // PHẦN 2: ĐỒNG BỘ TOÀN BỘ CĂN HISALE
   // ==================================================================
-  if (hisalePendingUnits > 0 && !isTerminating) {
-    console.log(`\n▶️ [BƯỚC 2/2] BẮT ĐẦU ĐỒNG BỘ TOÀN BỘ CĂN HISALE CÓ ẢNH...`);
-    const batchSize = Number(process.env.IMAGE_SYNC_BATCH_SIZE || 20);
-    let batchIndex = 0;
-    let totalProcessed = 0;
-    let totalSuccess = 0;
+  await syncUnitsInBatches('hisale', 'HiSale', hisalePendingUnits, 'BƯỚC 2/3');
 
-    while (!isTerminating) {
-      batchIndex++;
-      console.log(`\n--- [Batch #${batchIndex}] Đang xử lý ${batchSize} căn tiếp theo... ---`);
-      try {
-        const result = await syncPendingImages({ source: 'hisale', limit: batchSize });
-        if (!result || result.total === 0 || result.enabled === false) {
-          console.log(`✨ Đã hoàn tất toàn bộ căn HiSale!`);
-          break;
-        }
-
-        totalProcessed += result.total || 0;
-        totalSuccess += result.success || 0;
-        console.log(`✅ Hoàn thành batch #${batchIndex}: Thành công ${result.success}/${result.total} căn.`);
-      } catch (err) {
-        console.error(`❌ Lỗi batch #${batchIndex}:`, err.message);
-        break;
-      }
-    }
-
-    console.log(`\n🏁 Đã xử lý ${totalProcessed} căn HiSale (Thành công ${totalSuccess} căn).`);
-  } else if (hisalePendingUnits === 0) {
-    console.log(`✅ [BƯỚC 2/2] Toàn bộ căn HiSale có ảnh đã được tải lên Google Drive từ trước.`);
-  }
+  // ==================================================================
+  // PHẦN 3: ĐỒNG BỘ TOÀN BỘ CĂN VHUB
+  // ==================================================================
+  await syncUnitsInBatches('vhub', 'VHub', vhubPendingUnits, 'BƯỚC 3/3');
 
   // ==================================================================
   // TỔNG KẾT

@@ -6,9 +6,11 @@
   "scripts": {
     "start": "node src/index.js",
     "crawl:now": "node src/index.js --now",
+    "crawl:all": "node src/index.js --init",
     "crawl:init": "node src/index.js --init",
     "crawl:salepro": "node src/index.js --init --source=salepro",
     "crawl:hisale": "node src/index.js --init --source=hisale",
+    "crawl:vhub": "node src/index.js --init --source=vhub",
     "test:mail": "node src/testMail.js",
     "test:mail:empty": "node src/testMail.js --empty",
     "report:now": "node src/index.js --digest",
@@ -21,15 +23,20 @@
     "drive:migrate-segments:execute": "node src/scripts/migrateDriveSegments.js --execute",
     "images:stats": "node src/scripts/imageStats.js",
     "images:sync": "node src/scripts/syncImages.js",
+    "sync:images": "node src/scripts/syncImages.js",
     "images:sync-projects": "node src/scripts/syncProjects.js",
     "images:backfill": "node src/scripts/backfillImages.js",
     "images:sync-all": "node src/scripts/syncAll.js",
+    "sync:all": "node src/scripts/syncAll.js",
     "export:excel": "node src/scripts/exportExcel.js",
     "report:weekly": "node src/scripts/weeklyReport.js --send",
     "test:mail:weekly": "node src/scripts/weeklyReport.js --test",
     "test": "node test/verifyV3.js",
     "test:v2": "node test/verifyV2.js",
-    "test:integration": "node test/integration.test.js"
+    "test:integration": "node test/integration.test.js",
+    "history:init": "node src/scripts/initHistory.js",
+    "documents:sync": "node src/scripts/syncPricingDocuments.js",
+    "test:reports": "node test/reportRequirements.test.js"
   },
   "dependencies": {
     "@google-cloud/local-auth": "^3.0.1",

@@ -1,3 +1,4 @@
+const { trackedBulkWrite, markMissing } = require('../services/inventoryHistory');
 const axios = require('axios');
 const Unit = require('../models/Unit');
 const Project = require('../models/Project');
@@ -94,8 +95,8 @@ function isCloudflareOrAuthError(status, payload) {
 function normalizeHighRiseUnit(item, project = {}) {
   if (!item || typeof item !== 'object') return null;
   if (item.is_not_show === true) return null;
-  if (item.state && item.state !== 'public') return null;
-  if (String(item.state_line || '').toLowerCase() === 'sold') return null;
+  if (item.state && item.state !== 'public' && item.state_line !== 'sold') return null;
+
 
   const unitCode = String(item.product_code || item.product_name || '').trim();
   if (!unitCode) return null;
@@ -127,7 +128,7 @@ function normalizeHighRiseUnit(item, project = {}) {
     price_text: formatPriceText(price),
     price_tts: earlyPrice && earlyPrice > 0 ? earlyPrice : null,
     status:
-      String(item.state_line_name || '').trim() ||
+      (String(item.state_line || '').toLowerCase() === 'sold' ? '\u0110\u00e3 b\u00e1n' : String(item.state_line_name || '').trim()) ||
       (item.state_line === 'available' ? 'Còn hàng' : String(item.state_line || 'Còn hàng')),
     direction: String(item.base_direction_name || '').trim() || '',
     delivery_standard: '',
@@ -196,7 +197,7 @@ async function saveSaleProUnitsToMongo(unitDocs, isInitialSync = false) {
       },
     }));
 
-    const result = await Unit.bulkWrite(ops, { ordered: false });
+    const result = await trackedBulkWrite(Unit, ops, { ordered: false });
     newCount += result.upsertedCount || 0;
     updatedCount += (result.matchedCount || 0);
   }
@@ -375,9 +376,11 @@ async function crawlAllSaleProHighRiseProjects(isInitialSync = false, options = 
     const label = `[${project.project_id}] ${project.project_name}`;
 
     try {
+      const scanStartedAt = new Date();
       const { rawItems, apiTotal, pagesFetched } = await fetchProjectHighRiseUnits(project, options);
       const unitDocs = rawItems.map((item) => normalizeHighRiseUnit(item, project)).filter(Boolean);
       const saveRes = await saveSaleProUnitsToMongo(unitDocs, isInitialSync);
+      if (Number.isFinite(apiTotal) && rawItems.length >= apiTotal) await markMissing(Unit, {source:'salepro',project_id:{$in:[project.project_id,String(project.project_id)]},'raw_data.project_type':'high_rise'},scanStartedAt);
 
       consecutiveAuthErrors = 0;
       successProjects += 1;

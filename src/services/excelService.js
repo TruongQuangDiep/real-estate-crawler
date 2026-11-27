@@ -1,8 +1,10 @@
+const { extractExtendedFields } = require('./unitFields');
+const { addMovementSheets } = require('./inventoryReport');
 const ExcelJS = require('exceljs');
 
 /**
  * Tạo file báo cáo Excel trực tiếp trong buffer bộ nhớ (không cần ghi file tạm ra đĩa).
- * Chuẩn 24 cột V2 (giữ nguyên 18 cột truyền thống và bổ sung 6 cột Google Drive & Media).
+ * 37 cột: 18 cột gốc, 8 cột media và 11 cột theo yêu cầu báo cáo.
  * 
  * @param {Array<Object>} units - Danh sách các bản ghi căn hộ mới
  * @param {Object} options - Tùy chọn tiêu đề worksheet ('Danh sách căn mới' hoặc 'Báo cáo tuần')
@@ -50,6 +52,17 @@ async function buildExcelReport(units = [], options = {}) {
     { header: 'Thư mục Google Drive', key: 'drive_folder_url', width: 42 },
     { header: 'Tài liệu liên quan', key: 'document_urls', width: 38 },
     { header: 'Trạng thái đồng bộ hình ảnh', key: 'image_sync_status', width: 22 },
+    { header: 'Trục', key: 'axis', width: 14 },
+    { header: 'Mặt tiền (m)', key: 'frontWidth', width: 16 },
+    { header: 'Giá vay (VNĐ)', key: 'priceLoan', width: 24 },
+    { header: 'Giá TTTĐ (VNĐ)', key: 'priceTttd', width: 24 },
+    { header: 'Đơn giá (VNĐ/m²)', key: 'unitPrice', width: 24 },
+    { header: 'HiSale - Quỹ căn', key: 'hisaleQuyCan', width: 18 },
+    { header: 'HiSale - Quỹ HOT', key: 'hisaleQuyHot', width: 18 },
+    { header: 'HiSale - Quỹ CĐT', key: 'hisaleQuyCdt', width: 18 },
+    { header: 'VHub - Quỹ độc quyền', key: 'vhubQuyDocQuyen', width: 22 },
+    { header: 'VHub - Quỹ chung (QCK)', key: 'vhubQuyChung', width: 22 },
+    { header: 'VHub - Quỹ chéo', key: 'vhubQuyCheo', width: 18 },
   ];
 
   units.forEach((unit, index) => {
@@ -106,6 +119,7 @@ async function buildExcelReport(units = [], options = {}) {
     }
 
     const row = sheet.addRow({
+      ...extractExtendedFields(unit),
       index: index + 1,
       source: (unit.source || '').toUpperCase(),
       project_name: unit.project_name || '',
@@ -117,13 +131,13 @@ async function buildExcelReport(units = [], options = {}) {
       direction: unit.direction || '',
       area_land: unit.area_land ? Number(unit.area_land) : null,
       area_build: unit.area_build ? Number(unit.area_build) : null,
-      price: unit.price ? Number(unit.price) : null,
-      price_tts: unit.price_tts ? Number(unit.price_tts) : null,
+      price: unit.price ? Number(unit.price) : '-',
+      price_tts: unit.price_tts ? Number(unit.price_tts) : '-',
       status: unit.status || 'Còn hàng',
       delivery_standard: unit.delivery_standard || '',
       bank_support: unit.bank_support || '',
       price_list_url: unit.price_list_url || '',
-      created_at: unit.created_at ? new Date(unit.created_at) : new Date(),
+      created_at: unit.created_at ? new Date(new Date(unit.created_at).getTime() + 7 * 3600000) : null,
 
       // V3 fields
       drive_image_urls: driveUnitImages,
@@ -173,9 +187,15 @@ async function buildExcelReport(units = [], options = {}) {
   sheet.getColumn('direction').alignment = { horizontal: 'center', vertical: 'top' };
   sheet.getColumn('status').alignment = { horizontal: 'center', vertical: 'top' };
 
-  // Khóa dòng đầu tiên (freeze header) & bật AutoFilter từ cột A đến cột Z (26 cột)
+  // Include every data row and every column in the filter range.
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
-  sheet.autoFilter = { from: 'A1', to: 'Z1' };
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: sheet.rowCount, column: sheet.columnCount } };
+  for (const key of ['priceLoan', 'priceTttd', 'unitPrice']) sheet.getColumn(key).numFmt = '#,##0';
+  sheet.eachRow((row, n) => { if (n > 1 && typeof row.getCell('unitPrice').value === 'number' && row.getCell('unitPrice').value < 1) row.getCell('unitPrice').numFmt = '0.00000000'; });
+  if (options.movements) {
+    await addMovementSheets(workbook, units, options.movements);
+    await require('./pricingDocuments').addDocumentSheet(workbook, units);
+  }
 
   return workbook.xlsx.writeBuffer();
 }

@@ -4,6 +4,7 @@ const Unit = require('../models/Unit');
 const Project = require('../models/Project');
 const {
   isDriveConfigured,
+  getDriveClient,
   ensureFolderPath,
   uploadFile,
   verifyDriveItemExists,
@@ -14,7 +15,7 @@ const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_CONCURRENCY = 2;
 const DEFAULT_MAX_SIZE_MB = 0; // 0 = không giới hạn dung lượng ảnh tải về
 const DEFAULT_MAX_RETRIES = 3;
-const DOWNLOAD_TIMEOUT_MS = 60000; // 60s để tải các file ảnh lớn mượt mà
+const DOWNLOAD_TIMEOUT_MS = 25000; // 25s để tải file mượt mà nhưng không bị treo quá lâu khi link chết
 const LOCK_TIMEOUT_MS = 15 * 60 * 1000; // Khóa xử lý 15 phút
 
 let isSyncRunning = false;
@@ -24,12 +25,18 @@ const ALLOWED_DOMAINS = [
   'hisale.vn',
   'hisale.com',
   'salepro.com',
+  'vhub.com.vn',
+  'g-hub.vn',
+  'r2.dev',
+  'vistax.vn',
   'fptcloud.com',
   'amazonaws.com',
   'cloudfront.net',
   'googleusercontent.com',
   'googleapis.com',
   'drive.google.com',
+  'docs.google.com',
+  'google.com',
 ];
 
 /**
@@ -516,24 +523,178 @@ function detectBufferFormat(buffer, contentType = '', url = '') {
   if (cleanHeader.includes('application/pdf') || url.toLowerCase().endsWith('.pdf')) {
     return { mimeType: 'application/pdf', ext: 'pdf' };
   }
+  if (
+    cleanHeader.includes('spreadsheetml') ||
+    cleanHeader.includes('excel') ||
+    url.toLowerCase().endsWith('.xlsx') ||
+    url.toLowerCase().endsWith('.xls')
+  ) {
+    return { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: 'xlsx' };
+  }
+  if (
+    cleanHeader.includes('wordprocessingml') ||
+    cleanHeader.includes('msword') ||
+    url.toLowerCase().endsWith('.docx') ||
+    url.toLowerCase().endsWith('.doc')
+  ) {
+    return { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: 'docx' };
+  }
+
+  // ZIP / Office Open XML (xlsx, docx, etc.): PK..
+  if (buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b) {
+    if (
+      cleanHeader.includes('spreadsheetml') ||
+      cleanHeader.includes('excel') ||
+      url.toLowerCase().includes('.xlsx') ||
+      url.toLowerCase().includes('.xls')
+    ) {
+      return { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: 'xlsx' };
+    }
+    if (
+      cleanHeader.includes('wordprocessingml') ||
+      cleanHeader.includes('msword') ||
+      url.toLowerCase().includes('.docx') ||
+      url.toLowerCase().includes('.doc')
+    ) {
+      return { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: 'docx' };
+    }
+    return { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: 'xlsx' };
+  }
 
   throw new Error(`Định dạng dữ liệu không xác định hoặc không được hỗ trợ (MIME: ${contentType})`);
 }
 
 /**
- * Tải file an toàn từ URL kèm cơ chế retry, backoff, giới hạn dung lượng và chống SSRF (kể cả redirect)
+ * Trích xuất Google Drive file ID từ các dạng link file (view, uc?id=..., open?id=..., spreadsheets/d/..., document/d/...)
  */
-async function downloadBufferWithRetry(rawUrl, maxRetries = DEFAULT_MAX_RETRIES) {
+function extractDriveFileId(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (trimmed.includes('/folders/')) {
+    return null;
+  }
+  const match = trimmed.match(
+    /(?:drive\.google\.com\/file\/d\/|docs\.google\.com\/(?:spreadsheets|document|presentation)\/d\/|[?&]id=)([a-zA-Z0-9_-]+)/i
+  );
+  if (match) return match[1];
+  return null;
+}
+
+/**
+ * Trích xuất Google Drive folder ID từ các dạng link folder Drive
+ */
+function extractDriveFolderId(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const match = rawUrl.match(/(?:drive\.google\.com\/(?:drive\/)?(?:u\/\d+\/)?folders\/)([a-zA-Z0-9_-]+)/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Tải file an toàn từ URL (hoặc Google Drive File ID) kèm retry, backoff, giới hạn dung lượng và chống SSRF
+ */
+async function downloadBufferWithRetry(
+  rawUrl,
+  maxRetries = DEFAULT_MAX_RETRIES,
+  { allowDrivePdf = false, allowDriveDoc = false } = {}
+) {
   const safeUrl = validateSafeUrl(rawUrl);
   const envVal = process.env.IMAGE_MAX_SIZE_MB;
   const maxMb = envVal !== undefined && envVal !== '' ? Number(envVal) : DEFAULT_MAX_SIZE_MB;
   const maxBytes = maxMb > 0 ? maxMb * 1024 * 1024 : Infinity;
+  const driveFileId = extractDriveFileId(safeUrl);
   let attempt = 0;
   let lastErr = null;
 
   while (attempt < maxRetries) {
     attempt++;
     try {
+      if (driveFileId) {
+        const drive = getDriveClient();
+        const metaRes = await drive.files.get({
+          fileId: driveFileId,
+          fields: 'id, name, mimeType, size, trashed',
+          supportsAllDrives: true,
+        });
+        const meta = metaRes.data || {};
+        if (meta.trashed) {
+          throw new Error(`PERMANENT_DEAD_FILE: File Drive đã bị xóa vào thùng rác (${driveFileId})`);
+        }
+        const driveMime = String(meta.mimeType || '').toLowerCase();
+        const isPdf = driveMime.includes('pdf');
+        const isSpreadsheet = driveMime.includes('spreadsheet') || driveMime.includes('excel');
+        const isDoc = driveMime.includes('document') || driveMime.includes('msword') || driveMime.includes('officedocument');
+        const isGoogleApps = driveMime.includes('google-apps');
+
+        if (isGoogleApps || isSpreadsheet || isDoc || isPdf) {
+          if (!allowDriveDoc && (!allowDrivePdf || !isPdf)) {
+            throw new Error(`Định dạng dữ liệu không phải ảnh (MIME: ${meta.mimeType})`);
+          }
+        }
+
+        const declaredSize = Number(meta.size || 0);
+        if (maxBytes !== Infinity && declaredSize > maxBytes) {
+          throw new Error(`Dung lượng file (${declaredSize} bytes) vượt quá giới hạn cho phép`);
+        }
+
+        if (driveMime.includes('google-apps.spreadsheet')) {
+          const exportRes = await drive.files.export(
+            {
+              fileId: driveFileId,
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            },
+            { responseType: 'arraybuffer', timeout: DOWNLOAD_TIMEOUT_MS }
+          );
+          const buffer = Buffer.from(exportRes.data);
+          const originalName = meta.name ? (meta.name.toLowerCase().endsWith('.xlsx') ? meta.name : `${meta.name}.xlsx`) : 'Bang_tinh_gia.xlsx';
+          return {
+            buffer,
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ext: 'xlsx',
+            etag: '',
+            lastModified: '',
+            originalName,
+          };
+        }
+
+        if (driveMime.includes('google-apps.document')) {
+          const exportRes = await drive.files.export(
+            {
+              fileId: driveFileId,
+              mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            },
+            { responseType: 'arraybuffer', timeout: DOWNLOAD_TIMEOUT_MS }
+          );
+          const buffer = Buffer.from(exportRes.data);
+          const originalName = meta.name ? (meta.name.toLowerCase().endsWith('.docx') ? meta.name : `${meta.name}.docx`) : 'Tai_lieu.docx';
+          return {
+            buffer,
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            ext: 'docx',
+            etag: '',
+            lastModified: '',
+            originalName,
+          };
+        }
+
+        const mediaRes = await drive.files.get(
+          { fileId: driveFileId, alt: 'media', supportsAllDrives: true },
+          { responseType: 'arraybuffer', timeout: DOWNLOAD_TIMEOUT_MS }
+        );
+        const buffer = Buffer.from(mediaRes.data);
+        if (buffer.length === 0) {
+          throw new Error('Dữ liệu tải từ Drive có kích thước 0 byte');
+        }
+        const { mimeType, ext } = detectBufferFormat(buffer, meta.mimeType || '', meta.name || safeUrl);
+        return {
+          buffer,
+          mimeType,
+          ext,
+          etag: '',
+          lastModified: '',
+          originalName: meta.name || '',
+        };
+      }
+
       const response = await axios.get(safeUrl, {
         responseType: 'arraybuffer',
         timeout: DOWNLOAD_TIMEOUT_MS,
@@ -571,7 +732,20 @@ async function downloadBufferWithRetry(rawUrl, maxRetries = DEFAULT_MAX_RETRIES)
       };
     } catch (err) {
       lastErr = err;
-      if (err.response && (err.response.status === 404 || err.response.status === 410)) {
+      const errStatus = err.status || (err.response && err.response.status);
+      const errMsg = String(err.message || '');
+      if (
+        errStatus === 404 ||
+        errStatus === 410 ||
+        errStatus === 403 ||
+        errMsg.includes('MIME:') ||
+        errMsg.includes('PERMANENT_DEAD_FILE:') ||
+        errMsg.includes('thùng rác') ||
+        errMsg.includes('File not found')
+      ) {
+        if (errStatus === 404 || errMsg.includes('File not found')) {
+          lastErr = new Error(`PERMANENT_DEAD_FILE: ${errMsg}`);
+        }
         break;
       }
       if (attempt >= maxRetries) break;
@@ -597,6 +771,7 @@ function determineSegment(item) {
   const rawProjectType = String(
     item.project_type ||
     item.raw_data?.project_type ||
+    item.raw_data?.productType ||
     item.raw_data?.project?.typeName ||
     item.raw_data?.typeName ||
     ''
@@ -605,6 +780,7 @@ function determineSegment(item) {
   const normProjectType = removeVietnameseTones(rawProjectType);
   if (
     normProjectType.includes('thap tang') ||
+    normProjectType.includes('thap_tang') ||
     normProjectType.includes('low_rise') ||
     normProjectType.includes('low rise')
   ) {
@@ -612,6 +788,7 @@ function determineSegment(item) {
   }
   if (
     normProjectType.includes('cao tang') ||
+    normProjectType.includes('cao_tang') ||
     normProjectType.includes('high_rise') ||
     normProjectType.includes('high rise')
   ) {
@@ -1484,9 +1661,27 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
       console.warn(`[ImageSync] ℹ️ Căn ${unitDoc.unit_code} đang được xử lý bởi worker khác.`);
       return { status: 'LOCKED_BY_OTHER', unit_code: unitDoc.unit_code };
     }
+  } else {
+    // Gia hạn lease khi worker thực sự bắt đầu xử lý căn (tránh hết hạn do xếp hàng trong batch lớn)
+    const renewed = await Unit.updateOne(
+      {
+        _id: unitDoc._id,
+        image_sync_lock_owner: effectiveLeaseId,
+        image_sync_locked_until: { $gt: new Date() },
+      },
+      {
+        $set: {
+          image_sync_locked_until: new Date(Date.now() + LOCK_TIMEOUT_MS),
+        },
+      }
+    );
+    if (renewed.matchedCount === 0) {
+      return { status: 'LOCK_EXPIRED', unit_code: unitDoc.unit_code };
+    }
   }
 
-  const sourceName = (unitDoc.source || 'hisale').toLowerCase() === 'hisale' ? 'HiSale' : 'SalePro';
+  const srcLower = (unitDoc.source || 'hisale').toLowerCase();
+  const sourceName = srcLower === 'hisale' ? 'HiSale' : srcLower === 'vhub' ? 'VHub' : 'SalePro';
   const rawUrls = Array.isArray(unitDoc.image_urls) ? unitDoc.image_urls.filter(Boolean) : [];
 
   // Tách tài liệu (Excel, PDF, Word, v.v.) bị up nhầm vào image_urls
@@ -1512,8 +1707,78 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     unitDoc.image_urls = urlsToSync;
   }
 
-  // Nếu là SalePro và căn không có ảnh riêng:
-  if (sourceName === 'SalePro' && urlsToSync.length === 0) {
+  // Thu thập danh sách tài liệu / bảng tính / thư mục ngoài cần đồng bộ sang Drive nội bộ
+  const docsToSync = [];
+  const seenDocUrls = new Set();
+  const foldersToSync = [];
+  const seenFolderIds = new Set();
+
+  function addDocCandidate(url) {
+    if (!url || typeof url !== 'string') return;
+    const trimmed = url.trim();
+    if (!trimmed) return;
+
+    const folderId = extractDriveFolderId(trimmed);
+    if (folderId) {
+      if (!seenFolderIds.has(folderId)) {
+        seenFolderIds.add(folderId);
+        foldersToSync.push(folderId);
+      }
+      return;
+    }
+
+    if (seenDocUrls.has(trimmed)) return;
+    const driveId = extractDriveFileId(trimmed);
+    const clean = trimmed.split('?')[0].split('#')[0].toLowerCase();
+    const isDocExt = DOCUMENT_EXTENSIONS.some((ext) => clean.endsWith(ext));
+    if (driveId || isDocExt) {
+      seenDocUrls.add(trimmed);
+      docsToSync.push(trimmed);
+    }
+  }
+
+  for (const docUrl of unitDoc.document_urls) {
+    addDocCandidate(docUrl);
+  }
+  if (unitDoc.price_list_url) {
+    addDocCandidate(unitDoc.price_list_url);
+  }
+
+  // Quét các file nằm trong thư mục Google Drive ngoài (nếu có)
+  if (foldersToSync.length > 0) {
+    try {
+      const drive = getDriveClient();
+      for (const extFolderId of foldersToSync) {
+        try {
+          let folderPageToken;
+          do {
+          const listRes = await drive.files.list({
+            q: `'${extFolderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`,
+            fields: 'nextPageToken, files(id, name, mimeType, size)',
+            pageSize: 1000,
+            pageToken: folderPageToken,
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+          });
+          const folderFiles = listRes.data.files || [];
+          for (const f of folderFiles) {
+            const fileDownloadUrl = `https://drive.google.com/file/d/${f.id}`;
+            if (!seenDocUrls.has(fileDownloadUrl)) {
+              seenDocUrls.add(fileDownloadUrl);
+              docsToSync.push(fileDownloadUrl);
+            }
+          }
+          folderPageToken = listRes.data.nextPageToken;
+          } while (folderPageToken);
+        } catch (fErr) {
+          console.warn(`[ImageSync] ⚠️ Không thể duyệt thư mục Drive ngoài (${extFolderId}):`, fErr.message);
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Nếu là SalePro và căn không có ảnh riêng và không có tài liệu riêng:
+  if (sourceName === 'SalePro' && urlsToSync.length === 0 && docsToSync.length === 0) {
     const noImgRes = await Unit.updateOne(
       {
         _id: unitDoc._id,
@@ -1536,7 +1801,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     return { status: 'NO_IMAGE', unit_code: unitDoc.unit_code };
   }
 
-  if (urlsToSync.length === 0) {
+  if (urlsToSync.length === 0 && docsToSync.length === 0) {
     const noImgRes = await Unit.updateOne(
       {
         _id: unitDoc._id,
@@ -1581,15 +1846,36 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
 
     let successCount = 0;
     let failCount = 0;
+    let permanentFailCount = 0;
 
     for (let index = 0; index < urlsToSync.length; index++) {
       const originalUrl = urlsToSync[index];
 
       try {
-        const { buffer, mimeType, ext, etag, lastModified } = await downloadBufferWithRetry(originalUrl);
-        const sha256 = computeSha256(buffer);
-
         const existingStored = unitDoc.stored_images.find((img) => img.original_url === originalUrl);
+        if (
+          existingStored &&
+          existingStored.sha256 &&
+          existingStored.drive_file_id &&
+          existingStored.drive_url &&
+          extractDriveFileId(originalUrl)
+        ) {
+          const stillExists = await verifyDriveItemExists(existingStored.drive_file_id);
+          if (stillExists) {
+            if (!unitDoc.drive_image_urls.includes(existingStored.drive_url)) {
+              unitDoc.drive_image_urls.push(existingStored.drive_url);
+            }
+            successCount++;
+            continue;
+          }
+        }
+
+        const { buffer, mimeType, ext, etag, lastModified, originalName } = await downloadBufferWithRetry(
+          originalUrl,
+          DEFAULT_MAX_RETRIES,
+          { allowDrivePdf: sourceName === 'VHub' }
+        );
+        const sha256 = computeSha256(buffer);
 
         let needUpload = !existingStored || existingStored.sha256 !== sha256;
         if (existingStored && existingStored.sha256 === sha256 && existingStored.drive_file_id) {
@@ -1617,12 +1903,28 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
             if (!unitDoc.drive_image_urls.includes(duplicateHash.drive_url)) {
               unitDoc.drive_image_urls.push(duplicateHash.drive_url);
             }
+            unitDoc.stored_images = unitDoc.stored_images.filter((img) => img.original_url !== originalUrl);
+            unitDoc.stored_images.push({
+              original_url: originalUrl,
+              drive_file_id: duplicateHash.drive_file_id,
+              drive_url: duplicateHash.drive_url,
+              sha256,
+              mime_type: mimeType,
+              file_size: buffer.length,
+              etag,
+              last_modified: lastModified,
+              image_type: 'UNIT',
+              uploaded_at: new Date(),
+            });
             successCount++;
             continue;
           }
         }
 
-        const fileName = `image_${String(index + 1).padStart(2, '0')}.${ext}`;
+        const fileName =
+          ext === 'pdf' && originalName
+            ? sanitizeDriveName(originalName)
+            : `image_${String(index + 1).padStart(2, '0')}.${ext}`;
         const uploaded = await uploadFile({
           name: fileName,
           buffer,
@@ -1662,6 +1964,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
               drive_image_urls: unitDoc.drive_image_urls,
               drive_folder_id: unitDoc.drive_folder_id,
               drive_folder_url: unitDoc.drive_folder_url,
+              image_sync_locked_until: new Date(Date.now() + LOCK_TIMEOUT_MS),
             },
           }
         );
@@ -1683,7 +1986,8 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
             uploadErr.message.includes('excel') ||
             uploadErr.message.includes('pdf') ||
             uploadErr.message.includes('msword') ||
-            uploadErr.message.includes('officedocument'))
+            uploadErr.message.includes('officedocument') ||
+            uploadErr.message.includes('google-apps'))
         ) {
           console.warn(
             `[ImageSync] ℹ️ File [${originalUrl}] của căn ${unitDoc.unit_code} là tài liệu (không phải ảnh), tự động chuyển sang danh mục tài liệu.`
@@ -1697,6 +2001,14 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           continue;
         }
         failCount++;
+        const errMsg = String(uploadErr.message || '');
+        if (
+          errMsg.includes('PERMANENT_DEAD_FILE:') ||
+          errMsg.includes('thùng rác') ||
+          errMsg.includes('File not found')
+        ) {
+          permanentFailCount++;
+        }
         unitDoc.image_sync_error = uploadErr.message;
         console.warn(
           `[ImageSync] ⚠️ Lỗi tải ảnh [${originalUrl}] của căn ${unitDoc.unit_code}:`,
@@ -1705,11 +2017,112 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
       }
     }
 
+    // ==========================================
+    // Đồng bộ tài liệu và bảng tính (Docs / Google Sheets / PDFs) sang thư mục Drive nội bộ
+    // ==========================================
+    for (let dIndex = 0; dIndex < docsToSync.length; dIndex++) {
+      const docUrl = docsToSync[dIndex];
+      try {
+        const existingStored = unitDoc.stored_images.find((img) => img.original_url === docUrl);
+        if (
+          existingStored &&
+          existingStored.sha256 &&
+          existingStored.drive_file_id &&
+          existingStored.drive_url &&
+          extractDriveFileId(docUrl)
+        ) {
+          const stillExists = await verifyDriveItemExists(existingStored.drive_file_id);
+          if (stillExists) {
+            successCount++;
+            continue;
+          }
+        }
+
+        const { buffer, mimeType, ext, etag, lastModified, originalName } = await downloadBufferWithRetry(
+          docUrl,
+          DEFAULT_MAX_RETRIES,
+          { allowDrivePdf: true, allowDriveDoc: true }
+        );
+        const sha256 = computeSha256(buffer);
+
+        let needUpload = !existingStored || existingStored.sha256 !== sha256;
+        if (existingStored && existingStored.sha256 === sha256 && existingStored.drive_file_id) {
+          const stillExists = await verifyDriveItemExists(existingStored.drive_file_id);
+          if (!stillExists) {
+            needUpload = true;
+          }
+        }
+
+        if (!needUpload && existingStored && existingStored.drive_url) {
+          successCount++;
+          continue;
+        }
+
+        const fileName =
+          originalName
+            ? sanitizeDriveName(originalName)
+            : `Bang_tinh_gia_${unitDoc.unit_code}.${ext || 'xlsx'}`;
+
+        const uploaded = await uploadFile({
+          name: fileName,
+          buffer,
+          mimeType,
+          parentFolderId: folder.id,
+          description: `Tài liệu/Bảng tính giá căn ${unitDoc.unit_code} - Dự án ${unitDoc.project_name}`,
+        });
+
+        unitDoc.stored_images = unitDoc.stored_images.filter((img) => img.original_url !== docUrl);
+        unitDoc.stored_images.push({
+          original_url: docUrl,
+          drive_file_id: uploaded.id,
+          drive_url: uploaded.webViewLink,
+          sha256,
+          mime_type: mimeType,
+          file_size: uploaded.size,
+          etag,
+          last_modified: lastModified,
+          image_type: 'UNIT',
+          uploaded_at: new Date(),
+        });
+
+        await Unit.updateOne(
+          {
+            _id: unitDoc._id,
+            image_sync_lock_owner: effectiveLeaseId,
+            image_sync_locked_until: { $gt: new Date() },
+          },
+          {
+            $set: {
+              stored_images: unitDoc.stored_images,
+              drive_folder_id: unitDoc.drive_folder_id,
+              drive_folder_url: unitDoc.drive_folder_url,
+              image_sync_locked_until: new Date(Date.now() + LOCK_TIMEOUT_MS),
+            },
+          }
+        );
+
+        successCount++;
+      } catch (docErr) {
+        failCount++;
+        const errMsg = String(docErr.message || '');
+        if (
+          errMsg.includes('PERMANENT_DEAD_FILE:') ||
+          errMsg.includes('thùng rác') ||
+          errMsg.includes('File not found')
+        ) {
+          permanentFailCount++;
+        }
+        unitDoc.image_sync_error = docErr.message;
+        console.warn(`[ImageSync] ⚠️ Lỗi tải tài liệu/bảng tính [${docUrl}] của căn ${unitDoc.unit_code}:`, docErr.message);
+      }
+    }
+
+    const totalItems = urlsToSync.length + docsToSync.length;
     let finalStatus = 'SUCCESS';
-    if (urlsToSync.length === 0) {
+    if (totalItems === 0) {
       finalStatus = 'NO_IMAGE';
       unitDoc.image_sync_error = '';
-    } else if (successCount === urlsToSync.length) {
+    } else if (successCount === totalItems) {
       finalStatus = 'SUCCESS';
       unitDoc.image_sync_error = '';
     } else if (successCount > 0) {
@@ -1717,6 +2130,15 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     } else {
       finalStatus = 'FAILED';
     }
+
+    // Nếu thất bại hoàn toàn do file gốc đã bị xóa vĩnh viễn / vào thùng rác, đánh dấu hết retry để không lặp vô hạn
+    const allFailuresPermanent = failCount > 0 && permanentFailCount === failCount;
+    const retryUpdate =
+      finalStatus === 'FAILED' || finalStatus === 'PARTIAL'
+        ? allFailuresPermanent
+          ? { image_sync_retries: DEFAULT_MAX_RETRIES }
+          : { image_sync_retries: Math.min(DEFAULT_MAX_RETRIES, Number(unitDoc.image_sync_retries || 0) + 1) }
+        : {};
 
     // Conditional final update: chỉ ghi nếu worker sở hữu lease hợp lệ
     const finalUpdate = await Unit.updateOne(
@@ -1736,6 +2158,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           image_synced_at: new Date(),
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
+          ...retryUpdate,
           ...(hasMisplacedDocs ? { image_urls: unitDoc.image_urls, document_urls: unitDoc.document_urls } : {}),
         },
       }
@@ -1780,15 +2203,22 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
 }
 
 /**
- * Xử lý một batch danh sách căn với số lượng đồng thời được kiểm soát
+ * Xử lý một batch danh sách căn theo mô hình Worker Pool (luồng nào xong trước lập tức bốc căn tiếp theo, không chờ đợi chéo)
  */
 async function processBatchWithConcurrency(units, concurrency = DEFAULT_CONCURRENCY) {
-  const results = [];
-  for (let i = 0; i < units.length; i += concurrency) {
-    const chunk = units.slice(i, i + concurrency);
-    const chunkResults = await Promise.all(chunk.map((u) => syncSingleUnit(u, u._leaseId)));
-    results.push(...chunkResults);
+  const results = new Array(units.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < units.length) {
+      const currentIndex = nextIndex++;
+      const unit = units[currentIndex];
+      results[currentIndex] = await syncSingleUnit(unit, unit._leaseId);
+    }
   }
+
+  const workerCount = Math.min(Math.max(1, concurrency), units.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return results;
 }
 
@@ -1861,7 +2291,43 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
       },
     });
 
-    const query = { $or: filterConditions };
+    // Căn chưa có thư mục Drive nhưng có tài liệu / bảng tính cần đồng bộ
+    filterConditions.push({
+      $and: [
+        {
+          $or: [
+            { drive_folder_url: null },
+            { drive_folder_url: '' },
+            { drive_folder_url: { $exists: false } },
+          ],
+        },
+        {
+          $or: [
+            { 'document_urls.0': { $exists: true } },
+            { price_list_url: { $regex: /(?:drive\.google\.com|docs\.google\.com)/i } },
+          ],
+        },
+        {
+          $or: [
+            { image_sync_retries: { $lt: DEFAULT_MAX_RETRIES } },
+            { image_sync_retries: { $exists: false } },
+          ],
+        },
+      ],
+    });
+
+    const hasMediaConditions = [
+      { 'image_urls.0': { $exists: true } },
+      { 'document_urls.0': { $exists: true } },
+      { price_list_url: { $regex: /(?:drive\.google\.com|docs\.google\.com)/i } },
+    ];
+
+    const query = {
+      $and: [
+        { $or: filterConditions },
+        { $or: hasMediaConditions },
+      ],
+    };
     if (source && source !== 'all') {
       query.source = source.toLowerCase();
     }

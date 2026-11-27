@@ -1,3 +1,4 @@
+const { trackedBulkWrite, markMissing } = require('../services/inventoryHistory');
 const axios = require('axios');
 const Unit = require('../models/Unit');
 const Project = require('../models/Project');
@@ -488,7 +489,7 @@ async function saveUnitsToMongo(units, projectId, isInitialSync, projectMeta = n
 
   for (let i = 0; i < bulkOps.length; i += CHUNK_SIZE) {
     const chunk = bulkOps.slice(i, i + CHUNK_SIZE);
-    const bulkResult = await Unit.bulkWrite(chunk, { ordered: false });
+    const bulkResult = await trackedBulkWrite(Unit, chunk, { ordered: false });
     totalNew += bulkResult.upsertedCount || 0;
     totalMod += bulkResult.modifiedCount || 0;
   }
@@ -522,6 +523,7 @@ async function fetchViaPaginate(projectId, isInitialSync, projectMeta, referer, 
   let totalScanned = 0;
   let totalNewUnits = 0;
   let totalUpdatedUnits = 0;
+  let expectedTotal = null;
 
   while (currentPage <= lastPage && currentPage <= 500) {
     const response = await fetchWithHisaleSession(
@@ -555,6 +557,7 @@ async function fetchViaPaginate(projectId, isInitialSync, projectMeta, referer, 
 
     lastPage = Number(data.last_page) || 1;
     const totalExpected = Number(data.total) || '?';
+    if (Number.isFinite(Number(data.total))) expectedTotal = Number(data.total);
     const unitsOnPage = data.data;
     totalScanned += unitsOnPage.length;
 
@@ -579,7 +582,8 @@ async function fetchViaPaginate(projectId, isInitialSync, projectMeta, referer, 
   return {
     totalScanned,
     newUnitsCount: totalNewUnits,
-    updatedUnitsCount: totalUpdatedUnits
+    updatedUnitsCount: totalUpdatedUnits,
+    scanComplete: (expectedTotal !== null && totalScanned >= expectedTotal && currentPage >= lastPage) || currentPage > lastPage,
   };
 }
 
@@ -591,6 +595,7 @@ async function fetchViaPaginate(projectId, isInitialSync, projectMeta, referer, 
  * @param {object|null} sharedSessionState - State session dùng chung khi chạy nhiều dự án
  */
 async function crawlHisaleProject(projectIdOrMeta = 19, isInitialSync = false, sharedSessionState = null) {
+  const scanStartedAt = new Date();
   let projectMeta = null;
   let projectId;
 
@@ -628,9 +633,9 @@ async function crawlHisaleProject(projectIdOrMeta = 19, isInitialSync = false, s
       const units = await fetchViaMapData(projectId, referer, sessionState);
       if (units && units.length > 0) {
         const { newCount, modCount } = await saveUnitsToMongo(units, projectId, isInitialSync, projectMeta);
-        stats = { totalScanned: units.length, newUnitsCount: newCount, updatedUnitsCount: modCount };
+        stats = { totalScanned: units.length, newUnitsCount: newCount, updatedUnitsCount: modCount, scanComplete: true };
       } else {
-        stats = { totalScanned: 0, newUnitsCount: 0, updatedUnitsCount: 0 };
+        stats = { totalScanned: 0, newUnitsCount: 0, updatedUnitsCount: 0, scanComplete: Array.isArray(units) };
       }
     }
   } else {
@@ -644,7 +649,7 @@ async function crawlHisaleProject(projectIdOrMeta = 19, isInitialSync = false, s
 
     if (mapUnits && mapUnits.length > 0) {
       const { newCount, modCount } = await saveUnitsToMongo(mapUnits, projectId, isInitialSync, projectMeta);
-      stats = { totalScanned: mapUnits.length, newUnitsCount: newCount, updatedUnitsCount: modCount };
+      stats = { totalScanned: mapUnits.length, newUnitsCount: newCount, updatedUnitsCount: modCount, scanComplete: true };
     } else {
       stats =
         (await fetchViaPaginate(projectId, isInitialSync, projectMeta, referer, sessionState)) || {
@@ -656,6 +661,8 @@ async function crawlHisaleProject(projectIdOrMeta = 19, isInitialSync = false, s
   }
 
   // Cập nhật số lượng căn thực tế vào collection 'projects'
+  if (!stats.scanComplete) throw new Error('Incomplete HiSale inventory scan');
+  await markMissing(Unit, {source:'hisale', project_id: {$in:[projectId,String(projectId)]}}, scanStartedAt);
   await Project.updateOne(
     { source: 'hisale', project_id: projectId },
     {

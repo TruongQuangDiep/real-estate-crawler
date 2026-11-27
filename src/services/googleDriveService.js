@@ -7,6 +7,9 @@ const { google } = require('googleapis');
 const folderCache = new Map();
 // In-flight promises để ngăn chặn race condition khi nhiều luồng cùng tạo 1 thư mục đồng thời
 const folderCreationPromises = new Map();
+// Cache OAuth2 & Drive client theo đường dẫn file cấu hình để tránh đọc đĩa và tạo listener lặp lại
+let cachedDriveClient = null;
+let cachedDriveKey = '';
 
 /**
  * Chuẩn hóa tên thư mục/tập tin Google Drive:
@@ -97,8 +100,8 @@ function getOAuth2Client() {
   // Lắng nghe sự kiện token được tự động làm mới (refresh) để ghi lại vào token.json
   oauth2Client.on('tokens', (newTokens) => {
     try {
-      const merged = { ...tokens, ...newTokens };
-      fs.writeFileSync(check.tokenPath, JSON.stringify(merged, null, 2));
+      Object.assign(tokens, newTokens);
+      fs.writeFileSync(check.tokenPath, JSON.stringify(tokens, null, 2));
       console.log('[GoogleDrive] 🔄 Đã tự động cập nhật access token mới vào file token.json');
     } catch (err) {
       console.warn('[GoogleDrive] ⚠️ Không thể ghi token mới vào đĩa:', err.message);
@@ -109,17 +112,28 @@ function getOAuth2Client() {
 }
 
 /**
- * Trả về instance của Drive v3
+ * Trả về instance của Drive v3 (được cache trong RAM để tăng hiệu năng đa luồng)
  */
 function getDriveClient() {
+  const check = isDriveConfigured();
+  if (!check.enabled) {
+    throw new Error(`[GoogleDrive] Dịch vụ chưa sẵn sàng: ${check.reason}`);
+  }
+  const cacheKey = `${check.credsPath}::${check.tokenPath}`;
+  if (cachedDriveClient && cachedDriveKey === cacheKey) {
+    return cachedDriveClient;
+  }
+
   const auth = getOAuth2Client();
-  return google.drive({ version: 'v3', auth });
+  cachedDriveClient = google.drive({ version: 'v3', auth });
+  cachedDriveKey = cacheKey;
+  return cachedDriveClient;
 }
 
 /**
- * Thực thi hàm gọi Drive API có retry khi gặp lỗi 429 hoặc 5xx
+ * Thực thi hàm gọi Drive API có retry khi gặp lỗi 429, 403 rate limit hoặc 5xx
  */
-async function callWithRetry(apiFn, maxRetries = 3) {
+async function callWithRetry(apiFn, maxRetries = 4) {
   let attempt = 0;
   while (attempt < maxRetries) {
     try {
@@ -127,7 +141,20 @@ async function callWithRetry(apiFn, maxRetries = 3) {
     } catch (err) {
       attempt++;
       const status = err.status || (err.response && err.response.status) || err.code;
-      const isRetryable = status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+      const errMsg = String(err.message || '');
+      const isRateLimit403 =
+        (status === 403 || status === '403') &&
+        (errMsg.includes('rateLimitExceeded') ||
+          errMsg.includes('userRateLimitExceeded') ||
+          errMsg.includes('Rate Limit') ||
+          errMsg.includes('Quota exceeded'));
+      const isRetryable =
+        status === 429 ||
+        isRateLimit403 ||
+        status === 500 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504;
       if (attempt >= maxRetries || !isRetryable) {
         throw err;
       }

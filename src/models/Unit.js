@@ -9,7 +9,7 @@ const unitSchema = new mongoose.Schema(
       index: true
     },
     project_id: {
-      type: Number,
+      type: mongoose.Schema.Types.Mixed,
       index: true
     },
     project_name: {
@@ -186,6 +186,10 @@ const unitSchema = new mongoose.Schema(
       type: Date,
       default: null
     },
+    tracking_started_at: { type: Date, default: null },
+    last_seen_at: { type: Date, default: null },
+    listing_state: { type: String, enum: ['active', 'missing'], default: 'active' },
+    change_history: { type: [mongoose.Schema.Types.Mixed], default: [] },
     raw_data: {
       type: Object, // Lưu toàn bộ data JSON gốc từ API
       default: {}

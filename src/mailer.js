@@ -1,3 +1,4 @@
+const { getMovements } = require('./services/inventoryReport');
 const nodemailer = require('nodemailer');
 const Unit = require('./models/Unit');
 const ReportLog = require('./models/ReportLog');
@@ -101,20 +102,21 @@ async function sendNotificationEmail(stats = []) {
   const allFailed = stats.length > 0 && stats.every((s) => s.status === 'FAILED');
   const hasPartialOrError = stats.some((s) => s.status === 'FAILED' || s.status === 'PARTIAL');
 
+  const movements = await getMovements(new Date(now.getTime() - 24 * 3600000), now);
   const statusText = allFailed
     ? '❌ ĐỒNG BỘ THẤT BẠI'
     : hasPartialOrError
       ? '⚠️ DỮ LIỆU CHƯA ĐẦY ĐỦ'
       : units.length > 0
         ? `+${units.length} CĂN MỚI`
-        : 'ĐỒNG BỘ ỔN ĐỊNH';
+        : movements.rows.length > 0 ? 'CÓ BIẾN ĐỘNG GIÁ/TRẠNG THÁI' : 'ĐỒNG BỘ ỔN ĐỊNH';
 
   const subject = `[RỔ HÀNG BĐS] ${dateStr} - ${statusText} (${formatEmailTimestamp(now)})`;
-  const html = buildDailyReport({ stats, units, generatedAt: now });
+  const html = buildDailyReport({ stats, units, generatedAt: now, movements });
 
   const attachments = [];
-  if (units.length > 0) {
-    const excelBuffer = await buildExcelReport(units);
+  if (units.length > 0 || movements.rows.length > 0) {
+    const excelBuffer = await buildExcelReport(units, { movements });
     attachments.push({
       filename: `Bao_cao_ro_hang_${dateStr.replace(/\//g, '-')}.xlsx`,
       content: excelBuffer,
@@ -159,7 +161,7 @@ async function sendNotificationEmail(stats = []) {
         sent_at: now,
         status: 'SUCCESS',
         total_units: units.length,
-        summary: { stats, unitsCount: units.length },
+        summary: { stats, unitsCount: units.length, movements: movements.summary },
         recipients: smtpConfig.to.split(',').map((e) => e.trim()),
         excel_file_name: units.length > 0 ? `Bao_cao_ro_hang_${dateStr.replace(/\//g, '-')}.xlsx` : '',
       },
