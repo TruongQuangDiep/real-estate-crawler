@@ -88,7 +88,7 @@ async function runCrawlerForSource(sourceName, crawlFn, isInitialSync = false) {
  * @param {string|null} targetSource - Nguồn chỉ định ('hisale', 'salepro' hoặc null = cả 2)
  * @param {boolean} shouldSendMail - Có kích hoạt gửi email ngay sau phiên cào hay không
  */
-async function runJob(isInitialSync = false, targetSource = null, shouldSendMail = true) {
+async function runJob(isInitialSync = false, targetSource = null, shouldSendMail = true, suppressAlerts = false) {
   if (isRunning) {
     console.warn('[Runner] ⚠️ Đang có một phiên quét khác đang chạy. Bỏ qua yêu cầu mới để tránh xung đột dữ liệu.');
     return false;
@@ -143,7 +143,7 @@ async function runJob(isInitialSync = false, targetSource = null, shouldSendMail
             await CrawlLog.updateMany({ _id: { $in: logIds } }, { $set: { mail_sent: true } });
           }
         }
-      } else if (hasError && mailOnError) {
+      } else if (hasError && mailOnError && !suppressAlerts) {
         // Phiên cào định kỳ gặp lỗi nghiêm trọng: Gửi email cảnh báo kỹ thuật độc lập
         // (TUYỆT ĐỐI KHÔNG làm thay đổi is_notified của các căn mới đang chờ thông báo buổi sáng)
         console.warn(`\n[Mailer Alert] 🚨 Phiên quét có nguồn thất bại! Đang gửi email cảnh báo sự cố kỹ thuật...`);
@@ -274,6 +274,7 @@ async function main() {
   await connectDB();
 
   const args = process.argv.slice(2);
+  const isRefresh = args.includes('--refresh');
   const isInit = args.includes('--init');
   const isNow = args.includes('--now');
   const isDigest = args.includes('--digest');
@@ -290,7 +291,11 @@ async function main() {
     }
   }
 
-  if (isInit) {
+  if (isRefresh) {
+    const success = await runJob(false, targetSource, false, true);
+    await mongoose.disconnect();
+    process.exit(success ? 0 : 1);
+  } else if (isInit) {
     console.log(`[Runner] Chế độ --init: Khởi tạo dữ liệu ${targetSource ? `cho [${targetSource}]` : 'cho TẤT CẢ CÁC NGUỒN'}...`);
     const success = await runJob(true, targetSource, false);
     await mongoose.disconnect();
@@ -314,7 +319,7 @@ async function main() {
     const limitArg = args.find((a) => /^\d+$/.test(a));
     const limit = limitArg ? Number(limitArg) : null;
     console.log(`[Runner] Chế độ --sync-images: Bắt đầu đồng bộ ảnh Google Drive (giới hạn: ${limit || 'mặc định'})...`);
-    await syncPendingImages(limit);
+    await syncPendingImages({limit});
     await mongoose.disconnect();
     process.exit(0);
   } else {

@@ -1,3 +1,4 @@
+const { isDocumentUrl } = require('../services/fileFormats');
 const { trackedBulkWrite, markMissing } = require('../services/inventoryHistory');
 const axios = require('axios');
 const Unit = require('../models/Unit');
@@ -11,7 +12,7 @@ const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 
 const DOCUMENT_EXTENSIONS = ['.xlsx', '.xls', '.pdf', '.doc', '.docx', '.csv', '.zip', '.rar'];
-const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.heic', '.avif'];
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.heic', '.heif', '.avif', '.tif', '.tiff', '.svg'];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -88,7 +89,7 @@ function isDirectImageUrl(rawUrl) {
   }
 
   const cleanPath = lower.split('?')[0].split('#')[0];
-  if (DOCUMENT_EXTENSIONS.some((ext) => cleanPath.endsWith(ext))) {
+  if (isDocumentUrl(trimmed)) {
     return false;
   }
   if (IMAGE_EXTENSIONS.some((ext) => cleanPath.endsWith(ext))) {

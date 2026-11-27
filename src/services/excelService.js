@@ -1,5 +1,6 @@
 const { extractExtendedFields } = require('./unitFields');
 const { addMovementSheets } = require('./inventoryReport');
+const {folderUrl: canonicalFolderUrl} = require('./driveLinks');
 const ExcelJS = require('exceljs');
 
 /**
@@ -108,7 +109,7 @@ async function buildExcelReport(units = [], options = {}) {
 
     // Hyperlink cho thư mục Google Drive (nếu có)
     let folderCellVal = '';
-    const folderUrl = unit.drive_folder_url || unit.drive_project_folder_url;
+    const folderUrl = canonicalFolderUrl(unit) || unit.drive_project_folder_url;
     if (folderUrl && String(folderUrl).trim()) {
       const url = String(folderUrl).trim();
       folderCellVal = {
@@ -197,6 +198,7 @@ async function buildExcelReport(units = [], options = {}) {
     await require('./pricingDocuments').addDocumentSheet(workbook, units);
   }
 
+  require('./excelLinks').limitHyperlinks(workbook);
   return workbook.xlsx.writeBuffer();
 }
 

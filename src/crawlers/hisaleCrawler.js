@@ -1,3 +1,4 @@
+const { isDocumentUrl } = require('../services/fileFormats');
 const { trackedBulkWrite, markMissing } = require('../services/inventoryHistory');
 const axios = require('axios');
 const Unit = require('../models/Unit');
@@ -431,7 +432,7 @@ async function saveUnitsToMongo(units, projectId, isInitialSync, projectMeta = n
       rawImageList.forEach((img) => {
         if (img && img.url) {
           const cleanUrl = String(img.url).split('?')[0].split('#')[0].toLowerCase();
-          const isDoc = DOCUMENT_EXTENSIONS.some((ext) => cleanUrl.endsWith(ext));
+          const isDoc = isDocumentUrl(img.url);
           if (isDoc) {
             documents.push(img.url);
           } else {

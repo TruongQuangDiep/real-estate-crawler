@@ -383,6 +383,31 @@ pm2 logs real-estate-crawler --lines 100
 3. **Quota Google Drive API**: Giới hạn mặc định của Google Drive API v3 là 12.000 requests/phút. Cấu hình `IMAGE_UPLOAD_CONCURRENCY=2` và batch size 20 đảm bảo an toàn tuyệt đối, không bao giờ chạm ngưỡng giới hạn quota.
 # Báo cáo rổ hàng và lịch sử biến động
 
+Để cào mới rồi đồng bộ Drive và xuất Excel, dừng scheduler/phiên đồng bộ cũ, đóng file Excel đang mở và chạy từng lệnh trong PowerShell:
+
+```powershell
+cd D:\intern\crawler
+$env:IMAGE_UPLOAD_CONCURRENCY="4"
+$env:IMAGE_SYNC_BATCH_SIZE="20"
+$env:MEDIA_DOWNLOAD_TIMEOUT_MS="60000"
+$env:MEDIA_MAX_SIZE_MB="100"
+npm run crawl:refresh
+npm run sync:all -- --refresh-projects --refresh-files --retry-failed
+npm run documents:sync -- --refresh
+npm run drive:repair-links
+npm run export:excel
+```
+
+`crawl:refresh` cập nhật dữ liệu và ghi lịch sử, không gửi email ngay và không coi căn mới là dữ liệu nền như `--init`. Nếu cào thất bại/thiếu nguồn thì xử lý đăng nhập hoặc API trước khi coi báo cáo là dữ liệu mới đầy đủ. Lệnh đồng bộ có thể trả mã 2 khi còn file lỗi; vẫn có thể xuất Excel để xem phần thành công và lỗi. Các biến tốc độ ở trên chỉ áp dụng trong cửa sổ terminal hiện tại.
+
+`--refresh-projects` quét lại media dự án SalePro; `--refresh-files` kiểm tra lại nội dung file dù URL không đổi, có thể mất nhiều thời gian. Những lần sau có thể dùng `npm run sync:all` và `npm run documents:sync` để xử lý gia tăng. `--retry-failed` mở lại một lượt thử cho căn trước đó đã hết số lần retry. Nguồn 403/404, file bị xóa hoặc định dạng Google native không xuất được vẫn được ghi lỗi; không tạo link giả để lấp ô trống.
+
+Luồng media nhận ảnh, PDF, XLS/XLSX, DOC/DOCX, PPT/PPTX, CSV/TSV/TXT/JSON, ZIP/RAR/7Z, các file video/audio có đuôi được nhận diện và file nhị phân Drive khai báo octet-stream. Google Sheets/Docs/Slides/Drawings được xuất lần lượt sang XLSX/DOCX/PPTX/PDF. Giữ định dạng gốc của file nhị phân; không gán ZIP thành Excel. Giới hạn dung lượng/thời gian vẫn áp dụng. Đây là sao lưu các URL file mà crawler đã tìm thấy; không biến trang web hoặc link chia sẻ bất kỳ thành file tải được.
+
+Trong `Chi_tiet_quy_can`, cột AC giữ thư mục riêng của căn; AF là thư mục dự án dùng chung; AG là file nội bộ đầu tiên nếu có; AH/AI giải thích trạng thái và lỗi. Sheet `Tep_noi_bo` liệt kê từng file đã lưu để mở các file còn lại. Bản sao đã có được giữ link khi lượt tải mới thất bại và ghi rõ lỗi; không khẳng định bản đó là phiên bản mới nhất. `drive:repair-links` chỉ khôi phục URL từ ID đã lưu, không kiểm tra quyền hay sự tồn tại trên Drive.
+
+URL nguồn được giữ dạng văn bản để sao chép, ưu tiên hyperlink cho file/thư mục nội bộ. Bộ xuất giới hạn 60.000 hyperlink trên mỗi sheet để không vượt [giới hạn Excel](https://support.microsoft.com/en-us/excel/excel-specifications-and-limits); các URL vượt ngưỡng vẫn được giữ đầy đủ dưới dạng văn bản và ghi chú trong sheet hướng dẫn.
+
 Xuất báo cáo hiện tại bằng `npm run export:excel`. File được lưu trong `reports/` với hậu tố `_da_kiem_tra.xlsx`, theo ngày Việt Nam. Báo cáo gồm tổng quan, toàn bộ dự án, chi tiết căn, biến động quan sát được, hướng dẫn dữ liệu và trạng thái bảng tính giá trên Drive. Thư mục báo cáo và thông tin đăng nhập không đưa lên Git.
 
 - Danh sách dự án ghép danh mục `Project` với các căn đã lưu, ưu tiên ID theo từng sàn. Dự án có trong danh mục nhưng chưa có căn vẫn xuất hiện. Các ID chưa khớp danh mục được ghi rõ. Số căn 0 trong CSDL không tự động có nghĩa sàn đã hết hàng.

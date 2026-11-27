@@ -5,6 +5,8 @@ const ExcelJS = require('exceljs');
 const { connectDB } = require('../db');
 const Unit = require('../models/Unit');
 const Project = require('../models/Project');
+const PricingDocument = require('../models/PricingDocument');
+const { buildDriveIndex } = require('../services/driveLinks');
 
 const { extractExtendedFields, segment } = require('../services/unitFields');
 const { buildProjectInventory, addMovementSheets } = require('../services/inventoryReport');
@@ -21,6 +23,7 @@ async function exportAll() {
   const hisaleLock = count('hisale', /lock|giữ chỗ/i), saleproLock = count('salepro', /lock|giữ chỗ/i), vhubLock = count('vhub', /lock|giữ chỗ/i);
 
   const catalog = await Project.find({}).lean();
+  const lookupDrive = buildDriveIndex(catalog, await PricingDocument.find({}).lean());
   const projectInventory = buildProjectInventory(catalog, allUnits);
   const hisaleAllProjects = projectInventory.filter(p => p.source === 'hisale');
   const vhubAllProjects = projectInventory.filter(p => p.source === 'vhub');
@@ -267,10 +270,15 @@ async function exportAll() {
     { header: 'Thư mục Drive nội bộ (Công ty)', key: 'drive_folder_url', width: 45 },
     { header: 'Ngày ghi nhận', key: 'created_at', width: 22 },
     { header: 'Theo lần quét', key: 'listing_state', width: 30 },
+    { header: 'Drive dự án dùng chung', key: 'drive_project_folder', width: 32 },
+    { header: 'File nội bộ (nếu có)', key: 'drive_file', width: 32 },
+    { header: 'Tình trạng link/file Drive', key: 'drive_status', width: 52 },
+    { header: 'Lỗi đồng bộ Drive', key: 'drive_error', width: 65 },
   ];
 
   units.forEach((unit, index) => {
     const ext = extractExtendedFields(unit);
+    const drive = lookupDrive(unit);
 
     const row = detailSheet.addRow({
       index: index + 1,
@@ -300,14 +308,18 @@ async function exportAll() {
       vhub_quy_cheo: ext.vhubQuyCheo,
       delivery_standard: unit.delivery_standard || '',
       bank_support: unit.bank_support || '',
-      price_list_url: unit.price_list_url ? {text:'Mở nguồn',hyperlink:unit.price_list_url} : '',
-      drive_folder_url: unit.drive_folder_url ? {text:'Mở thư mục',hyperlink:unit.drive_folder_url} : '',
+      price_list_url: unit.price_list_url || '',
+      drive_folder_url: drive.folder ? {text:'Mở thư mục căn',hyperlink:drive.folder} : '',
+      drive_project_folder: drive.projectFolder ? {text:'Mở thư mục dự án',hyperlink:drive.projectFolder} : '',
+      drive_file: drive.files.length ? {text:'Mở file nội bộ',hyperlink:drive.files[0]} : '',
+      drive_status: drive.status,
+      drive_error: drive.error,
       listing_state: unit.listing_state === 'missing' ? 'Không còn trong rổ đã quét' : 'Có trong CSDL',
       created_at: unit.created_at ? new Date(new Date(unit.created_at).getTime() + 7 * 3600000) : null,
     });
     row.height=30;
     if (typeof ext.unitPrice === 'number' && ext.unitPrice < 1) row.getCell('unit_price').numFmt = '0.00000000';
-    for(const key of ['project_name','subdivision','unit_type']) row.getCell(key).alignment={wrapText:true,vertical:'middle'};
+    for(const key of ['project_name','subdivision','unit_type','drive_status','drive_error']) row.getCell(key).alignment={wrapText:true,vertical:'middle'};
   });
 
   // Header styling for Sheet 2
@@ -318,7 +330,7 @@ async function exportAll() {
   headerRow2.height = 42;
 
   // Màu nền cho các nhóm cột
-  for (let c = 1; c <= 31; c++) {
+  for (let c = 1; c <= detailSheet.columnCount; c++) {
     const cell = headerRow2.getCell(c);
     if (c >= 20 && c <= 22) {
       // Nhóm Quỹ HiSale
@@ -356,7 +368,7 @@ async function exportAll() {
   });
 
   detailSheet.views = [{ state: 'frozen', ySplit: 1 }];
-  detailSheet.autoFilter = { from: 'A1', to: `AE${detailSheet.rowCount}` };
+  detailSheet.autoFilter = { from: 'A1', to: `AI${detailSheet.rowCount}` };
 
   // ==================================================================
   // SHEET 3: TOÀN BỘ DỰ ÁN HỢP NHẤT (CÓ THỂ LỌC VÀ SORT TIỆN LỢI)
@@ -420,8 +432,10 @@ async function exportAll() {
   projectSheet.getColumn('pct_total').numFmt = '0.00%';
   await addMovementSheets(workbook, allUnits);
   await require('../services/pricingDocuments').addDocumentSheet(workbook, units);
+  require('../services/storedFilesReport').addStoredFilesSheet(workbook, units, lookupDrive);
+  require('../services/excelLinks').limitHyperlinks(workbook);
 
-  const exportDir = path.resolve(__dirname, '../../reports');
+  const exportDir = path.resolve(process.env.REPORT_OUTPUT_DIR || path.join(__dirname, '../../reports'));
   if (!fs.existsSync(exportDir)) {
     fs.mkdirSync(exportDir, { recursive: true });
   }

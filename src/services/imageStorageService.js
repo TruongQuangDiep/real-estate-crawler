@@ -1,3 +1,4 @@
+const { isDocumentUrl, detectExtraFormat, isDeclaredText } = require('./fileFormats');
 const crypto = require('crypto');
 const axios = require('axios');
 const Unit = require('../models/Unit');
@@ -15,7 +16,7 @@ const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_CONCURRENCY = 2;
 const DEFAULT_MAX_SIZE_MB = 0; // 0 = không giới hạn dung lượng ảnh tải về
 const DEFAULT_MAX_RETRIES = 3;
-const DOWNLOAD_TIMEOUT_MS = 25000; // 25s để tải file mượt mà nhưng không bị treo quá lâu khi link chết
+const DOWNLOAD_TIMEOUT_MS = Math.min(300000, Math.max(1000, Number(process.env.MEDIA_DOWNLOAD_TIMEOUT_MS) || 60000)); // 25s để tải file mượt mà nhưng không bị treo quá lâu khi link chết
 const LOCK_TIMEOUT_MS = 15 * 60 * 1000; // Khóa xử lý 15 phút
 
 let isSyncRunning = false;
@@ -410,8 +411,8 @@ function computeSha256(buffer) {
 /**
  * Kiểm tra chữ ký nhị phân (Magic Bytes) và Content-Type của file
  */
-function detectBufferFormat(buffer, contentType = '', url = '') {
-  if (!buffer || buffer.length < 4) {
+function detectBufferFormat(buffer, contentType = '', url = '', { allowDocuments = false } = {}) {
+  if (!buffer || !buffer.length || (buffer.length < 4 && !(allowDocuments && isDeclaredText(contentType, url)))) {
     throw new Error('Dữ liệu tải về quá ngắn hoặc rỗng, không phải file hợp lệ');
   }
 
@@ -421,12 +422,10 @@ function detectBufferFormat(buffer, contentType = '', url = '') {
 
   if (
     cleanHeader.includes('text/html') ||
-    cleanHeader.includes('application/json') ||
-    cleanHeader.includes('text/plain') ||
+    ((!allowDocuments || !isDeclaredText(contentType, url)) && (cleanHeader.includes('application/json') || cleanHeader.includes('text/plain'))) ||
     prefixStr.startsWith('<!doctype html') ||
     prefixStr.startsWith('<html') ||
-    prefixStr.startsWith('<?xml') ||
-    prefixStr.startsWith('{')
+    ((prefixStr.startsWith('<?xml') || prefixStr.startsWith('{')) && !(allowDocuments && isDeclaredText(contentType, url)))
   ) {
     throw new Error('Dữ liệu trả về là trang HTML / Text lỗi, không phải file ảnh hoặc tài liệu');
   }
@@ -505,6 +504,9 @@ function detectBufferFormat(buffer, contentType = '', url = '') {
     }
   }
 
+  const extra = detectExtraFormat(buffer, contentType, url, allowDocuments);
+  if (extra) return extra;
+
   if (cleanHeader.includes('image/png') || url.toLowerCase().endsWith('.png')) {
     return { mimeType: 'image/png', ext: 'png' };
   }
@@ -558,7 +560,7 @@ function detectBufferFormat(buffer, contentType = '', url = '') {
     ) {
       return { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: 'docx' };
     }
-    return { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ext: 'xlsx' };
+    return { mimeType: 'application/zip', ext: 'zip' };
   }
 
   throw new Error(`Định dạng dữ liệu không xác định hoặc không được hỗ trợ (MIME: ${contentType})`);
@@ -598,7 +600,7 @@ async function downloadBufferWithRetry(
   { allowDrivePdf = false, allowDriveDoc = false } = {}
 ) {
   const safeUrl = validateSafeUrl(rawUrl);
-  const envVal = process.env.IMAGE_MAX_SIZE_MB;
+  const envVal = process.env.MEDIA_MAX_SIZE_MB ?? process.env.IMAGE_MAX_SIZE_MB;
   const maxMb = envVal !== undefined && envVal !== '' ? Number(envVal) : DEFAULT_MAX_SIZE_MB;
   const maxBytes = maxMb > 0 ? maxMb * 1024 * 1024 : Infinity;
   const driveFileId = extractDriveFileId(safeUrl);
@@ -645,6 +647,7 @@ async function downloadBufferWithRetry(
             { responseType: 'arraybuffer', timeout: DOWNLOAD_TIMEOUT_MS }
           );
           const buffer = Buffer.from(exportRes.data);
+          if (buffer.length > maxBytes) throw new Error('Exported file exceeds configured size limit');
           const originalName = meta.name ? (meta.name.toLowerCase().endsWith('.xlsx') ? meta.name : `${meta.name}.xlsx`) : 'Bang_tinh_gia.xlsx';
           return {
             buffer,
@@ -665,6 +668,7 @@ async function downloadBufferWithRetry(
             { responseType: 'arraybuffer', timeout: DOWNLOAD_TIMEOUT_MS }
           );
           const buffer = Buffer.from(exportRes.data);
+          if (buffer.length > maxBytes) throw new Error('Exported file exceeds configured size limit');
           const originalName = meta.name ? (meta.name.toLowerCase().endsWith('.docx') ? meta.name : `${meta.name}.docx`) : 'Tai_lieu.docx';
           return {
             buffer,
@@ -676,15 +680,27 @@ async function downloadBufferWithRetry(
           };
         }
 
+        if (driveMime === 'application/vnd.google-apps.presentation' || driveMime === 'application/vnd.google-apps.drawing') {
+          const presentation = driveMime.endsWith('.presentation');
+          const mimeType = presentation ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : 'application/pdf';
+          const ext = presentation ? 'pptx' : 'pdf';
+          const exported = await drive.files.export({fileId:driveFileId,mimeType},{responseType:'arraybuffer',timeout:DOWNLOAD_TIMEOUT_MS});
+          const buffer=Buffer.from(exported.data);
+          if (buffer.length > maxBytes) throw new Error('Exported file exceeds configured size limit');
+          return {buffer,mimeType,ext,etag:'',lastModified:'',originalName:`${meta.name || 'Tai_lieu'}.${ext}`};
+        }
+        if (isGoogleApps) throw new Error(`Unsupported Google native file type: ${driveMime}`);
+
         const mediaRes = await drive.files.get(
           { fileId: driveFileId, alt: 'media', supportsAllDrives: true },
           { responseType: 'arraybuffer', timeout: DOWNLOAD_TIMEOUT_MS }
         );
         const buffer = Buffer.from(mediaRes.data);
+        if (buffer.length > maxBytes) throw new Error('Downloaded file exceeds configured size limit');
         if (buffer.length === 0) {
           throw new Error('Dữ liệu tải từ Drive có kích thước 0 byte');
         }
-        const { mimeType, ext } = detectBufferFormat(buffer, meta.mimeType || '', meta.name || safeUrl);
+        const { mimeType, ext } = detectBufferFormat(buffer, meta.mimeType || '', meta.name || safeUrl, {allowDocuments:allowDriveDoc});
         return {
           buffer,
           mimeType,
@@ -721,7 +737,7 @@ async function downloadBufferWithRetry(
       const etag = response.headers['etag'] || '';
       const lastModified = response.headers['last-modified'] || '';
 
-      const { mimeType, ext } = detectBufferFormat(buffer, contentType, safeUrl);
+      const { mimeType, ext } = detectBufferFormat(buffer, contentType, safeUrl, {allowDocuments:allowDriveDoc});
 
       return {
         buffer,
@@ -1611,6 +1627,7 @@ async function syncSaleProProjectMedia(projectDoc, options = {}) {
         $set: {
           image_sync_status: 'FAILED',
           image_sync_error: err.message,
+          image_sync_retries: Math.min(DEFAULT_MAX_RETRIES, Number(unitDoc.image_sync_retries || 0) + 1),
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
         },
@@ -1683,6 +1700,9 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
   const srcLower = (unitDoc.source || 'hisale').toLowerCase();
   const sourceName = srcLower === 'hisale' ? 'HiSale' : srcLower === 'vhub' ? 'VHub' : 'SalePro';
   const rawUrls = Array.isArray(unitDoc.image_urls) ? unitDoc.image_urls.filter(Boolean) : [];
+  const cachedDocuments = new Map();
+  let redirectedDocuments = 0;
+  const checkedUrls = [...new Set([...rawUrls, ...(unitDoc.document_urls || []), unitDoc.price_list_url || ''])];
 
   // Tách tài liệu (Excel, PDF, Word, v.v.) bị up nhầm vào image_urls
   const DOCUMENT_EXTENSIONS = ['.xlsx', '.xls', '.pdf', '.doc', '.docx', '.csv', '.zip', '.rar'];
@@ -1692,7 +1712,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
 
   for (const u of rawUrls) {
     const cleanUrl = String(u).split('?')[0].split('#')[0].toLowerCase();
-    const isDoc = DOCUMENT_EXTENSIONS.some((ext) => cleanUrl.endsWith(ext));
+    const isDoc = isDocumentUrl(u);
     if (isDoc) {
       hasMisplacedDocs = true;
       if (!unitDoc.document_urls.includes(u)) {
@@ -1712,6 +1732,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
   const seenDocUrls = new Set();
   const foldersToSync = [];
   const seenFolderIds = new Set();
+  let discoveryError = '';
 
   function addDocCandidate(url) {
     if (!url || typeof url !== 'string') return;
@@ -1730,7 +1751,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     if (seenDocUrls.has(trimmed)) return;
     const driveId = extractDriveFileId(trimmed);
     const clean = trimmed.split('?')[0].split('#')[0].toLowerCase();
-    const isDocExt = DOCUMENT_EXTENSIONS.some((ext) => clean.endsWith(ext));
+    const isDocExt = isDocumentUrl(trimmed);
     if (driveId || isDocExt) {
       seenDocUrls.add(trimmed);
       docsToSync.push(trimmed);
@@ -1771,10 +1792,11 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           folderPageToken = listRes.data.nextPageToken;
           } while (folderPageToken);
         } catch (fErr) {
+          discoveryError = fErr.message;
           console.warn(`[ImageSync] ⚠️ Không thể duyệt thư mục Drive ngoài (${extFolderId}):`, fErr.message);
         }
       }
-    } catch (_) {}
+    } catch (err) { discoveryError = err.message; }
   }
 
   // Nếu là SalePro và căn không có ảnh riêng và không có tài liệu riêng:
@@ -1787,10 +1809,14 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
       },
       {
         $set: {
-          image_sync_status: 'NO_IMAGE',
+          image_sync_status: discoveryError ? 'FAILED' : 'NO_IMAGE',
+          image_sync_error: discoveryError,
+          ...(discoveryError ? {image_sync_retries: Math.min(DEFAULT_MAX_RETRIES,Number(unitDoc.image_sync_retries || 0)+1)} : {}),
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
           image_synced_at: new Date(),
+          media_checked_urls: checkedUrls,
+          media_force_refresh: false,
           ...(hasMisplacedDocs ? { image_urls: [], document_urls: unitDoc.document_urls } : {}),
         },
       }
@@ -1798,7 +1824,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     if (noImgRes.matchedCount === 0) {
       return { status: 'LOCK_EXPIRED', unit_code: unitDoc.unit_code };
     }
-    return { status: 'NO_IMAGE', unit_code: unitDoc.unit_code };
+    return { status: discoveryError ? 'FAILED' : 'NO_IMAGE', unit_code: unitDoc.unit_code };
   }
 
   if (urlsToSync.length === 0 && docsToSync.length === 0) {
@@ -1810,10 +1836,14 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
       },
       {
         $set: {
-          image_sync_status: 'NO_IMAGE',
+          image_sync_status: discoveryError ? 'FAILED' : 'NO_IMAGE',
+          image_sync_error: discoveryError,
+          ...(discoveryError ? {image_sync_retries: Math.min(DEFAULT_MAX_RETRIES,Number(unitDoc.image_sync_retries || 0)+1)} : {}),
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
           image_synced_at: new Date(),
+          media_checked_urls: checkedUrls,
+          media_force_refresh: false,
           ...(hasMisplacedDocs ? { image_urls: [], document_urls: unitDoc.document_urls } : {}),
         },
       }
@@ -1821,7 +1851,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     if (noImgRes.matchedCount === 0) {
       return { status: 'LOCK_EXPIRED', unit_code: unitDoc.unit_code };
     }
-    return { status: 'NO_IMAGE', unit_code: unitDoc.unit_code };
+    return { status: discoveryError ? 'FAILED' : 'NO_IMAGE', unit_code: unitDoc.unit_code };
   }
 
   try {
@@ -1831,7 +1861,8 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     if (unitDoc.drive_folder_id) {
       const exists = await verifyDriveItemExists(unitDoc.drive_folder_id);
       if (exists) {
-        folder = { id: unitDoc.drive_folder_id, webViewLink: unitDoc.drive_folder_url };
+        folder = { id: unitDoc.drive_folder_id, webViewLink: unitDoc.drive_folder_url || `https://drive.google.com/drive/folders/${unitDoc.drive_folder_id}` };
+        unitDoc.drive_folder_url = folder.webViewLink;
       }
     }
 
@@ -1845,7 +1876,8 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
     unitDoc.drive_image_urls = unitDoc.drive_image_urls || [];
 
     let successCount = 0;
-    let failCount = 0;
+    let failCount = discoveryError ? 1 : 0;
+    if (discoveryError) unitDoc.image_sync_error = discoveryError;
     let permanentFailCount = 0;
 
     for (let index = 0; index < urlsToSync.length; index++) {
@@ -1853,8 +1885,16 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
 
       try {
         const existingStored = unitDoc.stored_images.find((img) => img.original_url === originalUrl);
+        if (existingStored?.mime_type && !existingStored.mime_type.startsWith('image/')) {
+          addDocCandidate(originalUrl);
+          if (!unitDoc.document_urls.includes(originalUrl)) unitDoc.document_urls.push(originalUrl);
+          unitDoc.image_urls = (unitDoc.image_urls || []).filter(u => u !== originalUrl);
+          hasMisplacedDocs = true;
+          redirectedDocuments++;
+          continue;
+        }
         if (
-          existingStored &&
+          !unitDoc.media_force_refresh && existingStored &&
           existingStored.sha256 &&
           existingStored.drive_file_id &&
           existingStored.drive_url &&
@@ -1870,11 +1910,21 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           }
         }
 
-        const { buffer, mimeType, ext, etag, lastModified, originalName } = await downloadBufferWithRetry(
+        const downloaded = await downloadBufferWithRetry(
           originalUrl,
           DEFAULT_MAX_RETRIES,
-          { allowDrivePdf: sourceName === 'VHub' }
+          { allowDrivePdf: true, allowDriveDoc: true }
         );
+        const { buffer, mimeType, ext, etag, lastModified, originalName } = downloaded;
+        if (!mimeType.startsWith('image/')) {
+          cachedDocuments.set(originalUrl, downloaded);
+          addDocCandidate(originalUrl);
+          if (!unitDoc.document_urls.includes(originalUrl)) unitDoc.document_urls.push(originalUrl);
+          unitDoc.image_urls = (unitDoc.image_urls || []).filter(u => u !== originalUrl);
+          hasMisplacedDocs = true;
+          redirectedDocuments++;
+          continue;
+        }
         const sha256 = computeSha256(buffer);
 
         let needUpload = !existingStored || existingStored.sha256 !== sha256;
@@ -2025,7 +2075,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
       try {
         const existingStored = unitDoc.stored_images.find((img) => img.original_url === docUrl);
         if (
-          existingStored &&
+          !unitDoc.media_force_refresh && existingStored &&
           existingStored.sha256 &&
           existingStored.drive_file_id &&
           existingStored.drive_url &&
@@ -2038,7 +2088,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           }
         }
 
-        const { buffer, mimeType, ext, etag, lastModified, originalName } = await downloadBufferWithRetry(
+        const { buffer, mimeType, ext, etag, lastModified, originalName } = cachedDocuments.get(docUrl) || await downloadBufferWithRetry(
           docUrl,
           DEFAULT_MAX_RETRIES,
           { allowDrivePdf: true, allowDriveDoc: true }
@@ -2117,7 +2167,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
       }
     }
 
-    const totalItems = urlsToSync.length + docsToSync.length;
+    const totalItems = urlsToSync.length + docsToSync.length - redirectedDocuments + (discoveryError ? 1 : 0);
     let finalStatus = 'SUCCESS';
     if (totalItems === 0) {
       finalStatus = 'NO_IMAGE';
@@ -2156,6 +2206,8 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
           drive_image_urls: unitDoc.drive_image_urls,
           stored_images: unitDoc.stored_images,
           image_synced_at: new Date(),
+          media_checked_urls: checkedUrls,
+          media_force_refresh: false,
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
           ...retryUpdate,
@@ -2193,6 +2245,7 @@ async function syncSingleUnit(unitDoc, leaseId = null) {
         $set: {
           image_sync_status: 'FAILED',
           image_sync_error: err.message,
+          image_sync_retries: Math.min(DEFAULT_MAX_RETRIES, Number(unitDoc.image_sync_retries || 0) + 1),
           image_sync_locked_until: null,
           image_sync_lock_owner: null,
         },
@@ -2239,8 +2292,8 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
 
   isSyncRunning = true;
   const startedAt = new Date();
-  const batchSize = Number(limit || process.env.IMAGE_SYNC_BATCH_SIZE || DEFAULT_BATCH_SIZE);
-  const concurrency = Number(process.env.IMAGE_UPLOAD_CONCURRENCY || DEFAULT_CONCURRENCY);
+  const batchSize = Math.min(200, Math.max(1, Math.floor(Number(limit || process.env.IMAGE_SYNC_BATCH_SIZE) || DEFAULT_BATCH_SIZE)));
+  const concurrency = Math.min(8, Math.max(1, Math.floor(Number(process.env.IMAGE_UPLOAD_CONCURRENCY) || DEFAULT_CONCURRENCY)));
 
   console.log(`\n====================================================================`);
   console.log(`📸 [IMAGE SYNC] BẮT ĐẦU ĐỒNG BỘ HÌNH ẢNH GOOGLE DRIVE - ${startedAt.toLocaleTimeString('vi-VN')}`);
@@ -2248,6 +2301,7 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
   console.log(`====================================================================`);
 
   try {
+    const mediaSourceRegex = /(?:drive\.google\.com|docs\.google\.com|\.(?:xlsx?|docx?|pptx?|pdf|csv|tsv|txt|json|zip|rar|7z|mp4|mov|webm|mp3|m4a|wav|odt|ods|odp)(?:$|[?#]))/i;
     const filterConditions = [];
 
     filterConditions.push({
@@ -2276,6 +2330,7 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
     // Phát hiện các căn có ảnh mới hoặc URL ảnh bị thay thế (kể cả khi tổng số lượng URL không đổi)
     filterConditions.push({
       image_sync_status: 'SUCCESS',
+      image_sync_retries: { $not: { $gte: DEFAULT_MAX_RETRIES } },
       $expr: {
         $gt: [
           {
@@ -2293,33 +2348,19 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
 
     // Căn chưa có thư mục Drive nhưng có tài liệu / bảng tính cần đồng bộ
     filterConditions.push({
-      $and: [
-        {
-          $or: [
-            { drive_folder_url: null },
-            { drive_folder_url: '' },
-            { drive_folder_url: { $exists: false } },
-          ],
-        },
-        {
-          $or: [
-            { 'document_urls.0': { $exists: true } },
-            { price_list_url: { $regex: /(?:drive\.google\.com|docs\.google\.com)/i } },
-          ],
-        },
-        {
-          $or: [
-            { image_sync_retries: { $lt: DEFAULT_MAX_RETRIES } },
-            { image_sync_retries: { $exists: false } },
-          ],
-        },
-      ],
+      image_sync_status: { $in: ['SUCCESS', 'NO_IMAGE'] },
+      $or: [{'image_urls.0':{$exists:true}}, {document_urls:{$regex:mediaSourceRegex}}, {price_list_url:{$regex:mediaSourceRegex}}],
+      image_sync_retries: { $not: { $gte: DEFAULT_MAX_RETRIES } },
+      $expr: { $gt: [{ $size: { $setDifference: [
+        { $setUnion: [{ $ifNull: ['$image_urls', []] }, { $ifNull: ['$document_urls', []] }, [{ $ifNull: ['$price_list_url', ''] }]] },
+        { $setUnion: [{ $ifNull: ['$stored_images.original_url', []] }, { $ifNull: ['$media_checked_urls', []] }] }
+      ] } }, 0] }
     });
 
     const hasMediaConditions = [
       { 'image_urls.0': { $exists: true } },
-      { 'document_urls.0': { $exists: true } },
-      { price_list_url: { $regex: /(?:drive\.google\.com|docs\.google\.com)/i } },
+      { document_urls: { $regex: mediaSourceRegex } },
+      { price_list_url: { $regex: mediaSourceRegex } },
     ];
 
     const query = {
@@ -2395,6 +2436,7 @@ async function syncPendingImages({ source = 'all', limit = null } = {}) {
       partial: partialCount,
       failed: failedCount,
       noImage: noImageCount,
+      results: results.map((r,i)=>({...r,source:pendingUnits[i].source,project_name:pendingUnits[i].project_name})),
     };
   } catch (err) {
     console.error('[ImageSync] ❌ Lỗi nghiêm trọng trong phiên đồng bộ ảnh:', err.message);

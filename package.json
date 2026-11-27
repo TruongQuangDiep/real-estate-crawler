@@ -36,7 +36,10 @@
     "test:integration": "node test/integration.test.js",
     "history:init": "node src/scripts/initHistory.js",
     "documents:sync": "node src/scripts/syncPricingDocuments.js",
-    "test:reports": "node test/reportRequirements.test.js"
+    "test:reports": "node test/reportRequirements.test.js",
+    "crawl:refresh": "node src/index.js --refresh",
+    "drive:repair-links": "node src/scripts/repairDriveLinks.js",
+    "test:media": "node test/mediaWorkflow.test.js"
   },
   "dependencies": {
     "@google-cloud/local-auth": "^3.0.1",

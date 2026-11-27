@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const Unit = require('../models/Unit');
 const PricingDocument = require('../models/PricingDocument');
 const { getDriveClient, ensureFolder, uploadFile, verifyDriveItemExists } = require('./googleDriveService');
@@ -18,7 +19,7 @@ function codeChunks(codes) {
   }
   return chunks;
 }
-async function syncPricingDocuments({ concurrency = 4, retryFailed = false } = {}) {
+async function syncPricingDocuments({ concurrency = 4, retryFailed = false, refresh = false } = {}) {
   // Fail once for a disconnected account, rather than generating thousands of identical failures.
   const drive = getDriveClient();
   await drive.files.get({fileId:process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID,fields:'id',supportsAllDrives:true});
@@ -27,7 +28,7 @@ async function syncPricingDocuments({ concurrency = 4, retryFailed = false } = {
   for (const unit of units) for (const url of candidates(unit)) if (isSpreadsheet(url)) unique.set(keyOf(url),url);
   const stored = await PricingDocument.find({}).lean();
   const done = new Map(stored.map(d=>[d.source_key,d]));
-  const pending = [...unique].filter(([key])=>!done.has(key) || (retryFailed && done.get(key).status==='FAILED') || Date.now()-new Date(done.get(key).checked_at).getTime()>7*86400000);
+  const pending = [...unique].filter(([key])=>refresh || !done.has(key) || (retryFailed && done.get(key).status==='FAILED') || Date.now()-new Date(done.get(key).checked_at).getTime()>7*86400000);
   const folder = await ensureFolder('Bang_tinh_gia', process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID);
   let cursor=0, success=0, failed=0;
   async function worker() {
@@ -35,14 +36,25 @@ async function syncPricingDocuments({ concurrency = 4, retryFailed = false } = {
       const [key,url]=pending[cursor++];
       try {
         const previous=done.get(key);
-        if(previous?.status==='SUCCESS' && await verifyDriveItemExists(previous.drive_file_id)) {
+        if(!refresh && previous?.status==='SUCCESS' && await verifyDriveItemExists(previous.drive_file_id)) {
           await PricingDocument.updateOne({source_key:key},{$set:{checked_at:new Date()}});
           success++;continue;
         }
         const file=await downloadBufferWithRetry(url,1,{allowDriveDoc:true,allowDrivePdf:true});
         if(!/spreadsheet|excel/.test(file.mimeType)) throw new Error('Source did not return a spreadsheet file');
+        const sha256=crypto.createHash('sha256').update(file.buffer).digest('hex');
+        let previousHash=previous?.sha256;
+        if(!previousHash && previous?.drive_url) {
+          try {
+            const oldCopy=await downloadBufferWithRetry(previous.drive_url,1,{allowDriveDoc:true,allowDrivePdf:true});
+            previousHash=crypto.createHash('sha256').update(oldCopy.buffer).digest('hex');
+          } catch (_) { /* A missing old copy will be replaced with the accessible source. */ }
+        }
+        if(previousHash===sha256 && previous.drive_file_id && await verifyDriveItemExists(previous.drive_file_id)) {
+          await PricingDocument.updateOne({source_key:key},{$set:{sha256,checked_at:new Date(),status:'SUCCESS',error:''}});success++;continue;
+        }
         const upload=await uploadFile({name:file.originalName || `Bang_tinh_gia_${key}.xlsx`,buffer:file.buffer,mimeType:file.mimeType,parentFolderId:folder.id});
-        await PricingDocument.updateOne({source_key:key},{$set:{source_url:url,name:file.originalName || key,drive_file_id:upload.id,drive_url:upload.webViewLink,status:'SUCCESS',error:'',checked_at:new Date()}},{upsert:true});
+        await PricingDocument.updateOne({source_key:key},{$set:{sha256,source_url:url,name:file.originalName || key,drive_file_id:upload.id,drive_url:upload.webViewLink,status:'SUCCESS',error:'',checked_at:new Date()}},{upsert:true});
         success++;
       } catch(error) {
         await PricingDocument.updateOne({source_key:key},{$set:{source_url:url,status:'FAILED',error:String(error.message).slice(0,600),checked_at:new Date()}},{upsert:true});
@@ -73,8 +85,8 @@ async function addDocumentSheet(workbook, units) {
     const existing=archived.get(keyOf(url));
     for (const codesText of codeChunks(codes)) {
     const row = sheet.addRow({source:u.source,project_name:u.project_name,unit_code:codesText,source_url:{text:'Mở nguồn',hyperlink:url},
-      drive_url:d?.status==='SUCCESS'?d.drive_url:existing?.drive_url||'',
-      status:d?.status==='SUCCESS'||existing?'Đã sao lưu':d?.status==='FAILED'?'Lỗi truy cập/tải file':isSpreadsheet(url)?'Chờ sao lưu':'Thư mục; chưa xác minh hết file',note:d?.error||''});
+      drive_url:d?.drive_url||existing?.drive_url||'',
+      status:d?.status==='FAILED'?(d.drive_url||existing?'Có bản sao trước; tải mới lỗi':'Lỗi truy cập/tải file'):d?.status==='SUCCESS'||existing?'Đã sao lưu':isSpreadsheet(url)?'Chờ sao lưu':'Thư mục; chưa xác minh hết file',note:d?.error||''});
     const link = row.getCell('drive_url').value;
     if (link) row.getCell('drive_url').value = {text:'Mở file nội bộ',hyperlink:link};
     row.height = 32;

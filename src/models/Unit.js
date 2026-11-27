@@ -137,6 +137,8 @@ const unitSchema = new mongoose.Schema(
       type: String, // Link trực tiếp mở thư mục căn trên Google Drive
       default: ''
     },
+    media_force_refresh: { type: Boolean, default: false },
+    media_checked_urls: { type: [String], default: [] },
     stored_images: {
       type: [
         {
