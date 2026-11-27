@@ -406,7 +406,9 @@ Luồng media nhận ảnh, PDF, XLS/XLSX, DOC/DOCX, PPT/PPTX, CSV/TSV/TXT/JSON,
 
 Trong `Chi_tiet_quy_can`, cột AC giữ thư mục riêng của căn; AF là thư mục dự án dùng chung; AG là file nội bộ đầu tiên nếu có; AH/AI giải thích trạng thái và lỗi. Sheet `Tep_noi_bo` liệt kê từng file đã lưu để mở các file còn lại. Bản sao đã có được giữ link khi lượt tải mới thất bại và ghi rõ lỗi; không khẳng định bản đó là phiên bản mới nhất. `drive:repair-links` chỉ khôi phục URL từ ID đã lưu, không kiểm tra quyền hay sự tồn tại trên Drive.
 
-URL nguồn được giữ dạng văn bản để sao chép, ưu tiên hyperlink cho file/thư mục nội bộ. Bộ xuất giới hạn 60.000 hyperlink trên mỗi sheet để không vượt [giới hạn Excel](https://support.microsoft.com/en-us/excel/excel-specifications-and-limits); các URL vượt ngưỡng vẫn được giữ đầy đủ dưới dạng văn bản và ghi chú trong sheet hướng dẫn.
+Toàn bộ link trong Excel được ghi thành URL đầy đủ dạng văn bản; không còn nhãn Mở file/Mở thư mục hay hyperlink object. Có thể sao chép URL và dán vào trình duyệt.
+
+Ba cột SalePro nằm ở AK–AM của sheet chi tiết (giữ vị trí các cột cũ): Quỹ Độc quyền + Ẩn, Quỹ chéo, Quỹ thưởng. Ánh xạ theo [mã giao diện SalePro](https://salepro.com/js/useFundGroupMerge.79c49baf.js): QA/QĐQ/QCK/QMH vào Độc quyền + Ẩn; QC vào quỹ chéo; QTH/QV vào quỹ thưởng. Không suy ra QCK là quỹ chéo chỉ từ chữ viết tắt. Sàn khác để trống các cột SalePro; mã chưa nhận diện dùng `-`.
 
 Khi tổng giá nguồn dương nhưng dưới 1 triệu VNĐ, báo cáo coi giá đó là bất thường/chưa xác minh: không suy đoán hệ số triệu/tỷ, hiển thị `-` cho các giá tổng bất thường và đơn giá liên quan trong bảng chính, ghi chú chất lượng tại cột AJ. Số gốc vẫn giữ trong CSDL và sheet đối soát của các căn thuộc bảng chính. Đây không phải xác nhận rằng sàn không có giá. Mốc cào từng nguồn và trạng thái phiên Drive hết hạn được ghi rõ để tránh nhầm thời điểm xuất file với độ mới/độ đầy đủ của dữ liệu.
 

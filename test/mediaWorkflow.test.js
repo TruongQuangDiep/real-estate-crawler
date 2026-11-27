@@ -59,6 +59,8 @@ async function main(){
     const cappedBook=new ExcelJS.Workbook();const capped=cappedBook.addWorksheet('Test');
     capped.addRow([{text:'One',hyperlink:'https://example.com/1'},{text:'Two',hyperlink:'https://example.com/2'}]);
     assert.equal(limitHyperlinks(cappedBook,1).length,1);assert.equal(capped.getCell('B1').value,'https://example.com/2');
+    const {urlsAsText}=require('../src/services/excelLinks');
+    assert.equal(urlsAsText(cappedBook),1);assert.equal(capped.getCell('A1').value,'https://example.com/1');
     assert.equal((await syncPendingImages({limit:10})).total,0,'Completed and empty-folder sources must not loop forever');
     csv='a,b\n3,4\n';const before=uploads.length;
     await Unit.updateOne({_id:a._id},{$set:{media_force_refresh:true,image_sync_status:'PENDING'}});

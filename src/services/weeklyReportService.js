@@ -190,10 +190,10 @@ function buildWeeklyReportHtml({
       <!-- EXCEL ATTACHMENT CALLOUT -->
       <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 14px 18px; margin-bottom: 10px;">
         <div style="font-weight: 700; color: #1e40af; font-size: 13px; margin-bottom: 4px;">
-          📎 ĐÃ ĐÍNH KÈM FILE EXCEL TỔNG HỢP 37 CỘT CHI TIẾT
+          📎 ĐÃ ĐÍNH KÈM FILE EXCEL TỔNG HỢP 40 CỘT CHI TIẾT
         </div>
         <div style="font-size: 12px; color: #1d4ed8; line-height: 1.4;">
-          File Excel tổng hợp toàn bộ <strong>${totalUnits.toLocaleString('vi-VN')} căn mới</strong> trong tuần, bao gồm đầy đủ 37 cột thông số, link hình ảnh Google Drive riêng của căn, ảnh dự án, layout và hyperlink mở trực tiếp thư mục Drive.
+          File Excel tổng hợp toàn bộ <strong>${totalUnits.toLocaleString('vi-VN')} căn mới</strong> trong tuần, bao gồm đầy đủ 40 cột thông số, link hình ảnh Google Drive riêng của căn, ảnh dự án, layout và URL đầy đủ để sao chép mở thư mục Drive.
         </div>
       </div>
 
@@ -345,7 +345,7 @@ async function sendWeeklyReport(options = {}) {
     noImage: newUnits.filter((u) => u.image_sync_status === 'NO_IMAGE').length,
   };
 
-  // 4. Tạo file Excel 37 cột đính kèm
+  // 4. Tạo file Excel 40 cột đính kèm
   const movements = isTest ? { rows: [], summary: {newUnits:0,priceChanged:0,sold:0,statusChanged:0}, start:periodStart,end:periodEnd,trackingStartedAt:null } : await getMovements(periodStart, periodEnd);
   const excelBuffer = await buildExcelReport(newUnits, { movements, sheetTitle: 'Báo cáo tuần' });
   const dateTag = periodStart.toISOString().slice(0, 10).replace(/-/g, '');

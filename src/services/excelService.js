@@ -6,7 +6,7 @@ const ExcelJS = require('exceljs');
 
 /**
  * Tạo file báo cáo Excel trực tiếp trong buffer bộ nhớ (không cần ghi file tạm ra đĩa).
- * 37 cột: 18 cột gốc, 8 cột media và 11 cột theo yêu cầu báo cáo.
+ * 40 cột: 18 cột gốc, 8 cột media và 14 cột theo yêu cầu báo cáo.
  * 
  * @param {Array<Object>} units - Danh sách các bản ghi căn hộ mới
  * @param {Object} options - Tùy chọn tiêu đề worksheet ('Danh sách căn mới' hoặc 'Báo cáo tuần')
@@ -65,6 +65,9 @@ async function buildExcelReport(units = [], options = {}) {
     { header: 'VHub - Quỹ độc quyền', key: 'vhubQuyDocQuyen', width: 22 },
     { header: 'VHub - Quỹ chung (QCK)', key: 'vhubQuyChung', width: 22 },
     { header: 'VHub - Quỹ chéo', key: 'vhubQuyCheo', width: 18 },
+    { header: 'SalePro - Quỹ Độc quyền + Ẩn', key: 'saleproQuyDocQuyenAn', width: 30 },
+    { header: 'SalePro - Quỹ chéo', key: 'saleproQuyCheo', width: 22 },
+    { header: 'SalePro - Quỹ thưởng', key: 'saleproQuyThuong', width: 24 },
   ];
 
   units.forEach((unit, index) => {
@@ -199,7 +202,7 @@ async function buildExcelReport(units = [], options = {}) {
     await require('./pricingDocuments').addDocumentSheet(workbook, units);
   }
 
-  require('./excelLinks').limitHyperlinks(workbook);
+  require('./excelLinks').urlsAsText(workbook);
   return workbook.xlsx.writeBuffer();
 }
 

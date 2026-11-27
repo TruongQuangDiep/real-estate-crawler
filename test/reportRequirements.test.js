@@ -25,6 +25,12 @@ async function main() {
   assert.equal(fields({source:'hisale',raw_data:{fund_type:0,fundTypeName:'Loại quỹ'}}).hisaleQuyCan,'-');
   assert.equal(fields({source:'hisale',raw_data:{fund_type:2}}).hisaleQuyHot,'Yes');
   assert.equal(fields({source:'salepro',raw_data:{apartment_axis_code:'01.06'}}).axis,'01.06');
+  for(const [code,expected] of [['QA',0],['QĐQ',0],['QCK',0],['QMH',0],['QC',1],['QTH',2],['QV',2]]) {
+    const f=fields({source:'salepro',raw_data:{fund_groups_sell_code:code}});
+    assert.deepEqual([f.saleproQuyDocQuyenAn,f.saleproQuyCheo,f.saleproQuyThuong],[0,1,2].map(i=>i===expected?'Yes':'No'));
+  }
+  assert.equal(fields({source:'hisale',raw_data:{}}).saleproQuyCheo,'');
+  assert.equal(fields({source:'salepro',raw_data:{fund_groups_sell_code:'UNKNOWN'}}).saleproQuyCheo,'-');
   assert.equal(fields({source:'salepro',raw_data:{price_per_meter:0.003}}).unitPrice,0.003);
   const { normalizeHighRiseUnit } = require('../src/crawlers/saleproHighRiseCrawler');
   const { normalizeVhubUnit } = require('../src/crawlers/vhubCrawler');
@@ -40,7 +46,7 @@ async function main() {
   const buffer=await buildExcelReport([{source:'vhub',unit_code:'TEST',...high}]);
   const wb=new ExcelJS.Workbook();await wb.xlsx.load(buffer);
   const sheet=wb.worksheets[0],headers=sheet.getRow(1).values;
-  assert.equal(sheet.columnCount,37);assert.equal(sheet.autoFilter,'A1:AK2');
+  assert.equal(sheet.columnCount,40);assert.equal(sheet.autoFilter,'A1:AN2');
   assert.equal(sheet.getCell(2,headers.indexOf('Mặt tiền (m)')).value,'');
   // Use an isolated collection and delete only that collection after the test.
   const conn=await mongoose.createConnection('mongodb://127.0.0.1:27017/real_estate_test_db',{serverSelectionTimeoutMS:5000}).asPromise();

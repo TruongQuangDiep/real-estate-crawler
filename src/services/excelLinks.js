@@ -17,4 +17,12 @@ function limitHyperlinks(workbook, max = 60000) {
   }
   return converted;
 }
-module.exports={limitHyperlinks};
+function urlsAsText(workbook) {
+  let converted=0;
+  for(const sheet of workbook.worksheets) sheet.eachRow(row=>row.eachCell(cell=>{
+    const v=cell.value;
+    if(v && typeof v==='object' && v.hyperlink) {cell.value=String(v.hyperlink);converted++;}
+  }));
+  return converted;
+}
+module.exports={limitHyperlinks,urlsAsText};

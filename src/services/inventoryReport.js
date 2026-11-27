@@ -77,6 +77,7 @@ async function addMovementSheets(workbook, units = [], supplied) {
   notes.addRow(['Danh sách dự án', 'Bao gồm danh mục Project và dự án có căn chưa khớp danh mục. Số căn là số bản ghi đang lưu, không bảo đảm tồn kho thời gian thực. Dự án 0 bản ghi không mặc định là hết hàng. Không gộp dự án giữa các sàn.']);
   notes.addRow(['Trạng thái / phân khúc', 'Đang lock chỉ đếm lock/giữ chỗ; đã cọc/đã bán là trạng thái khác. Phân khúc chưa xác định không tự gán cao tầng.']);
   notes.addRow(['Drive bảng tính giá', 'Xem các link file đã sao lưu và trạng thái tài liệu. Có thư mục Drive không đồng nghĩa đã sao lưu toàn bộ bảng tính. Link nguồn không phải file Excel thì không tự tạo file thay thế.']);
+  notes.addRow(['URL và quỹ SalePro', 'Tất cả link được ghi bằng URL đầy đủ dạng văn bản để sao chép, không dùng nhãn Mở file. SalePro: QA/QĐQ/QCK/QMH = Độc quyền + Ẩn; QC = Quỹ chéo; QTH/QV = Quỹ thưởng. Yes/No chỉ áp dụng cho đúng sàn; mã chưa nhận diện dùng -.']);
   const anomalies = units.filter(u => u.listing_state !== 'missing' && u.price > 0 && u.price < 1000000);
   if (anomalies.length) {
     notes.addRow(['Giá nguồn cần xác minh', `${anomalies.length} bản ghi có tổng giá lớn hơn 0 nhưng nhỏ hơn 1 triệu VNĐ. Đây là giá chưa xác minh: các giá tổng bất thường và đơn giá liên quan hiển thị - trong bảng chính. Số gốc giữ nguyên trong CSDL và Can_xac_minh_gia, không nhân đổi đơn vị hay suy đoán giá thực tế.`]);

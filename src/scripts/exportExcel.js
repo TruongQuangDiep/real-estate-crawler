@@ -276,6 +276,9 @@ async function exportAll() {
     { header: 'Tình trạng link/file Drive', key: 'drive_status', width: 52 },
     { header: 'Lỗi đồng bộ Drive', key: 'drive_error', width: 65 },
     { header: 'Ghi chú chất lượng giá', key: 'price_quality', width: 65 },
+    { header: 'SalePro - Quỹ Độc quyền + Ẩn', key: 'salepro_quy_doc_quyen_an', width: 30 },
+    { header: 'SalePro - Quỹ chéo', key: 'salepro_quy_cheo', width: 22 },
+    { header: 'SalePro - Quỹ thưởng', key: 'salepro_quy_thuong', width: 24 },
   ];
 
   units.forEach((unit, index) => {
@@ -309,6 +312,9 @@ async function exportAll() {
       vhub_quy_doc_quyen: ext.vhubQuyDocQuyen,
       vhub_quy_chung: ext.vhubQuyChung,
       vhub_quy_cheo: ext.vhubQuyCheo,
+      salepro_quy_doc_quyen_an: ext.saleproQuyDocQuyenAn,
+      salepro_quy_cheo: ext.saleproQuyCheo,
+      salepro_quy_thuong: ext.saleproQuyThuong,
       delivery_standard: unit.delivery_standard || '',
       bank_support: unit.bank_support || '',
       price_list_url: unit.price_list_url || '',
@@ -341,6 +347,8 @@ async function exportAll() {
     } else if (c >= 23 && c <= 25) {
       // Nhóm Quỹ VHub
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF059669' } };
+    } else if (c >= 37 && c <= 39) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD97706' } };
     } else {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
     }
@@ -365,13 +373,13 @@ async function exportAll() {
   detailSheet.getColumn('front_width').alignment = { horizontal: 'center', vertical: 'middle' };
   detailSheet.getColumn('status').alignment = { horizontal: 'center', vertical: 'middle' };
 
-  // Căn giữa 6 cột phân loại quỹ hàng
-  ['hisale_quy_can', 'hisale_quy_hot', 'hisale_quy_cdt', 'vhub_quy_doc_quyen', 'vhub_quy_chung', 'vhub_quy_cheo'].forEach(colKey => {
+  // Căn giữa 9 cột phân loại quỹ hàng
+  ['hisale_quy_can', 'hisale_quy_hot', 'hisale_quy_cdt', 'vhub_quy_doc_quyen', 'vhub_quy_chung', 'vhub_quy_cheo', 'salepro_quy_doc_quyen_an', 'salepro_quy_cheo', 'salepro_quy_thuong'].forEach(colKey => {
     detailSheet.getColumn(colKey).alignment = { horizontal: 'center', vertical: 'middle' };
   });
 
   detailSheet.views = [{ state: 'frozen', ySplit: 1 }];
-  detailSheet.autoFilter = { from: 'A1', to: `AJ${detailSheet.rowCount}` };
+  detailSheet.autoFilter = { from: 'A1', to: `AM${detailSheet.rowCount}` };
 
   // ==================================================================
   // SHEET 3: TOÀN BỘ DỰ ÁN HỢP NHẤT (CÓ THỂ LỌC VÀ SORT TIỆN LỢI)
@@ -445,7 +453,7 @@ async function exportAll() {
     const row=notes.addRow([`Lần cào ${log.source}`,`Kết thúc: ${time}; trạng thái: ${log.status}; số dòng quét: ${log.total_scanned || 0}. Thời điểm xuất Excel không phải thời điểm dữ liệu nguồn được cào.`]);
     row.alignment={wrapText:true,vertical:'top'};row.height=45;
   }
-  require('../services/excelLinks').limitHyperlinks(workbook);
+  require('../services/excelLinks').urlsAsText(workbook);
 
   const exportDir = path.resolve(process.env.REPORT_OUTPUT_DIR || path.join(__dirname, '../../reports'));
   if (!fs.existsSync(exportDir)) {

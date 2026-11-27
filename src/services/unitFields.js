@@ -32,6 +32,7 @@ function extractExtendedFields(unit) {
     unitPrice: source === 'vhub' ? field(raw, ['pricePerMeter', 'pricePerSqm']) : source === 'salepro' ? field(raw, ['price_per_meter']) : '-',
     hisaleQuyCan: '', hisaleQuyHot: '', hisaleQuyCdt: '',
     vhubQuyDocQuyen: '', vhubQuyChung: '', vhubQuyCheo: '',
+    saleproQuyDocQuyenAn: '', saleproQuyCheo: '', saleproQuyThuong: '',
   };
   if (source === 'hisale') {
     for (const k of ['priceAveFull', 'priceAve']) {
@@ -46,6 +47,13 @@ function extractExtendedFields(unit) {
     const name = String(raw.fundGroupsSellName || raw.fundGroup || '').toLowerCase();
     const fund = /độc quyền|doc quyen/.test(name) ? 0 : /chung|qck/.test(name) ? 1 : /chéo|cheo/.test(name) ? 2 : -1;
     ['vhubQuyDocQuyen', 'vhubQuyChung', 'vhubQuyCheo'].forEach((k, i) => { result[k] = fund < 0 ? '-' : fund === i ? 'Yes' : 'No'; });
+  }
+  if (source === 'salepro') {
+    // SalePro's useFundGroupMerge: QMH expands to QĐQ/QCK/QA;
+    // QC is cross inventory; QTH/QV are reward inventory (Quỹ thưởng).
+    const code=String(raw.fund_groups_sell_code_original || raw.fund_groups_sell_code || raw._fund_group_code || '').trim().toUpperCase();
+    const group=['QA','QĐQ','QCK','QMH'].includes(code)?0:code==='QC'?1:['QTH','QV'].includes(code)?2:-1;
+    ['saleproQuyDocQuyenAn','saleproQuyCheo','saleproQuyThuong'].forEach((key,i)=>{result[key]=group<0?'-':group===i?'Yes':'No';});
   }
   if (typeof result.unitPrice === 'number' && result.unitPrice >= 1) result.unitPrice = Math.round(result.unitPrice);
   return result;

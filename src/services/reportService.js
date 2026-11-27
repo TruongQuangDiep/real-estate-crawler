@@ -190,7 +190,7 @@ function buildDailyReport({ stats = [], units = [], generatedAt = new Date(), mo
       <div>
         <div style="font-weight: 700; color: #166534; font-size: 13px;">Báo cáo chi tiết: Bao_cao_ro_hang_${dateStr.replace(/\//g, '-')}.xlsx</div>
         <div style="font-size: 12px; color: #15803d; margin-top: 2px;">
-          Chứa đầy đủ <strong>${units.length}</strong> căn mới với 37 cột dữ liệu (diện tích, giá TTS, tiêu chuẩn bàn giao, link trực tiếp...). Vui lòng tải file đính kèm để xem chi tiết.
+          Chứa đầy đủ <strong>${units.length}</strong> căn mới với 40 cột dữ liệu (diện tích, giá TTS, tiêu chuẩn bàn giao, link trực tiếp...). Vui lòng tải file đính kèm để xem chi tiết.
         </div>
       </div>
     </div>
