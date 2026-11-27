@@ -420,7 +420,17 @@ Xuất báo cáo hiện tại bằng `npm run export:excel`. File được lưu 
 - Căn không còn xuất hiện chỉ được ghi nhận sau lần quét đầy đủ đúng phạm vi. Rời rổ được tách khỏi đã bán. Nếu API chỉ trả căn chưa bán thì không thể khẳng định số bán thực tế; lỗi hoặc phiên quét thiếu không phải bằng chứng căn đã bán. Báo cáo ngày lấy 24 giờ gần nhất, báo cáo tuần lấy tuần trước từ thứ Hai đến thứ Hai theo giờ Việt Nam, có chi tiết giá/trạng thái cũ và mới. Không khôi phục được biến động trước mốc bắt đầu nếu không có dữ liệu lịch sử khác.
 - Chạy `npm run documents:sync` để sao lưu các link Google Sheets/Excel trực tiếp tìm được trong dữ liệu nguồn sang thư mục `Bang_tinh_gia` dưới Drive nội bộ. File trùng ID được dùng chung. Kết quả lưu ở `PricingDocument`, gồm link bản sao hoặc lỗi truy cập. Dùng `npm run documents:sync -- --retry-failed` sau khi quyền nguồn đã được cấp lại. Tác vụ gia tăng chạy lúc 04:00 mỗi ngày khi `IMAGE_SYNC_ENABLED=true`; scheduler cần đang chạy (`npm start`). Các link thư mục nguồn vẫn do luồng đồng bộ media xử lý, có phân trang; sheet trạng thái không tuyên bố thư mục đã có đủ bảng tính nếu chưa xác minh.
 - Chạy `npm test`, `npm run test:reports` và `npm run test:integration` để kiểm tra. Kiểm thử lịch sử dùng collection tạm trong CSDL test riêng, không thay đổi dữ liệu căn thật.
-# Cách đếm căn trong Excel
+
+## Cách đếm căn trong Excel
+
+Sheet `Can_nghi_trung` đối chiếu tên dự án theo từ đầy đủ (bỏ dấu, không phân biệt thứ tự từ)
+và mã căn giữ dấu phân cách. Giữ nguyên các số/phân kỳ, không tự ghép tên gần giống hoặc
+mã khác tiền tố. So thêm tòa, tầng, phân khúc, diện tích và ghi rõ khác biệt/thiếu bằng chứng.
+Diện tích gần khớp dùng ngưỡng lớn hơn giữa 0,1 m² và 0,2%; khác cách đo vẫn cần kiểm tra.
+Các nhóm chỉ là nghi trùng, có thể gồm căn chưa thấy lại; không tự xóa/gộp hoặc trừ tổng căn.
+Cột R chỉ số dòng trong sheet chi tiết lúc xuất; cột U giữ ID CSDL để truy vết sau sắp xếp.
+Tên dự án/mã căn khác quy tắc giữa các sàn có thể chưa phát hiện; không cam kết tìm hết căn trùng.
+Chạy `npm run test:duplicates` để kiểm tra nhận diện và xuất sheet.
 
 `npm run export:excel` xuất **toàn bộ căn đã lưu tích lũy** trong CSDL, kể cả căn
 `listing_state: missing`. Không tự loại các căn này khỏi báo cáo.

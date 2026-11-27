@@ -475,6 +475,8 @@ async function exportAll() {
   projectSheet.getColumn('pct_source').numFmt = '0.00%';
   projectSheet.getColumn('pct_total').numFmt = '0.00%';
   await addMovementSheets(workbook, allUnits);
+  const duplicates = require('../services/duplicateCandidates').addDuplicateSheet(workbook, units, lookupDrive);
+  console.log(`Căn nghi trùng: ${duplicates.groups.length} nhóm, ${duplicates.records} dòng; chưa xác nhận gộp.`);
   await require('../services/pricingDocuments').addDocumentSheet(workbook, units);
   require('../services/storedFilesReport').addStoredFilesSheet(workbook, units, lookupDrive);
   const logs=await require('../models/CrawlLog').find({}).sort({started_at:-1}).limit(40).lean();

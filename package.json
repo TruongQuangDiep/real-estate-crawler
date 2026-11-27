@@ -39,7 +39,8 @@
     "test:reports": "node test/reportRequirements.test.js",
     "crawl:refresh": "node src/index.js --refresh",
     "drive:repair-links": "node src/scripts/repairDriveLinks.js",
-    "test:media": "node test/mediaWorkflow.test.js"
+    "test:media": "node test/mediaWorkflow.test.js",
+    "test:duplicates": "node test/duplicateCandidates.test.js"
   },
   "dependencies": {
     "@google-cloud/local-auth": "^3.0.1",
