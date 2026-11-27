@@ -584,7 +584,10 @@ async function fetchViaPaginate(projectId, isInitialSync, projectMeta, referer, 
     totalScanned,
     newUnitsCount: totalNewUnits,
     updatedUnitsCount: totalUpdatedUnits,
-    scanComplete: (expectedTotal !== null && totalScanned >= expectedTotal && currentPage >= lastPage) || currentPage > lastPage,
+    // Reaching the last page alone is insufficient when the API total disagrees.
+    // A partial response must not mark unseen records missing.
+    scanComplete: expectedTotal !== null && totalScanned === expectedTotal &&
+      (currentPage > lastPage || expectedTotal === 0),
   };
 }
 

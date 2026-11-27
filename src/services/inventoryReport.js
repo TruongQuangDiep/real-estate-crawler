@@ -1,18 +1,29 @@
 const Unit = require('../models/Unit');
 
-function buildProjectInventory(catalog, units) {
+function observationState(unit) {
+  if (unit.listing_state === 'missing') return 'missing';
+  return unit.last_seen_at && Number.isFinite(new Date(unit.last_seen_at).getTime()) ? 'observed' : 'untracked';
+}
+function observationCounts(units) {
+  const result = { total: units.length, observed: 0, missing: 0, untracked: 0 };
+  for (const unit of units) result[observationState(unit)]++;
+  return result;
+}
+function buildProjectInventory(catalog, units, { includeMissing = false } = {}) {
   const rows = catalog.map(p => ({ source: p.source, project_id: p.project_id, project_name: p.project_name,
-    count: 0, in_catalog: true, data_status: 'Chưa có căn trong CSDL; chưa kết luận hết hàng' }));
+    count: 0, total: 0, observed: 0, missing: 0, untracked: 0, in_catalog: true, data_status: 'Chưa có căn trong CSDL; chưa kết luận hết hàng' }));
   const byId = new Map(rows.map(p => [`${p.source}|${p.project_id}`, p]));
   const byName = new Map(rows.map(p => [`${p.source}|${p.project_name}`, p]));
   for (const u of units) {
     let row = byId.get(`${u.source}|${u.project_id}`) || byName.get(`${u.source}|${u.project_name}`);
     if (!row) {
-      row = { source: u.source, project_id: u.project_id, project_name: u.project_name, count: 0,
+      row = { source: u.source, project_id: u.project_id, project_name: u.project_name, count: 0, total: 0, observed: 0, missing: 0, untracked: 0,
         in_catalog: false, data_status: 'Có căn; ID/tên chưa khớp danh mục dự án' };
       rows.push(row); byId.set(`${u.source}|${u.project_id}`, row); byName.set(`${u.source}|${u.project_name}`, row);
     }
-    if (u.listing_state !== 'missing') row.count++;
+    row.total++;
+    row[observationState(u)]++;
+    if (includeMissing || u.listing_state !== 'missing') row.count++;
     if (row.in_catalog && row.count > 0) row.data_status = 'Có dữ liệu căn trong CSDL';
   }
   return rows.sort((a, b) => a.source.localeCompare(b.source) || b.count - a.count || a.project_name.localeCompare(b.project_name));
@@ -26,7 +37,7 @@ function movementRows(units, start, end) {
     const sold = delta.status && /đã bán|^sold$/i.test(delta.status.after);
     const price = Object.keys(delta).some(k => !['status', 'listing_state'].includes(k));
     result.push({ source: u.source, project_name: u.project_name, unit_code: u.unit_code, at,
-      kind: event.kind === 'NEW' ? 'Căn mới ghi nhận' : delta.listing_state ? (delta.listing_state.after === 'missing' ? 'Không còn trong rổ đã quét' : 'Xuất hiện lại') : sold ? 'Chuyển sang đã bán' : price ? 'Đổi giá' : 'Đổi trạng thái',
+      kind: event.kind === 'NEW' ? 'Căn mới ghi nhận' : delta.listing_state ? (delta.listing_state.after === 'missing' ? 'Chưa thấy lại trong phạm vi đã quét' : 'Xuất hiện lại') : sold ? 'Chuyển sang đã bán' : price ? 'Đổi giá' : 'Đổi trạng thái',
       old_price: delta.price?.before ?? '', new_price: delta.price?.after ?? '',
       old_status: delta.status?.before ?? '', new_status: delta.status?.after ?? '',
       detail: JSON.stringify(delta), price_changed: price, sold: Boolean(sold), is_new: event.kind === 'NEW',
@@ -78,7 +89,7 @@ async function addMovementSheets(workbook, units = [], supplied) {
   notes.addRow(['Trạng thái / phân khúc', 'Đang lock chỉ đếm lock/giữ chỗ; đã cọc/đã bán là trạng thái khác. Phân khúc chưa xác định không tự gán cao tầng.']);
   notes.addRow(['Drive bảng tính giá', 'Xem các link file đã sao lưu và trạng thái tài liệu. Có thư mục Drive không đồng nghĩa đã sao lưu toàn bộ bảng tính. Link nguồn không phải file Excel thì không tự tạo file thay thế.']);
   notes.addRow(['URL và quỹ SalePro', 'Tất cả link được ghi bằng URL đầy đủ dạng văn bản để sao chép, không dùng nhãn Mở file. SalePro: QA/QĐQ/QCK/QMH = Độc quyền + Ẩn; QC = Quỹ chéo; QTH/QV = Quỹ thưởng. Yes/No chỉ áp dụng cho đúng sàn; mã chưa nhận diện dùng -.']);
-  const anomalies = units.filter(u => u.listing_state !== 'missing' && u.price > 0 && u.price < 1000000);
+  const anomalies = units.filter(u => u.price > 0 && u.price < 1000000);
   if (anomalies.length) {
     notes.addRow(['Giá nguồn cần xác minh', `${anomalies.length} bản ghi có tổng giá lớn hơn 0 nhưng nhỏ hơn 1 triệu VNĐ. Đây là giá chưa xác minh: các giá tổng bất thường và đơn giá liên quan hiển thị - trong bảng chính. Số gốc giữ nguyên trong CSDL và Can_xac_minh_gia, không nhân đổi đơn vị hay suy đoán giá thực tế.`]);
     const quality = workbook.addWorksheet('Can_xac_minh_gia');
@@ -94,4 +105,4 @@ async function addMovementSheets(workbook, units = [], supplied) {
   notes.eachRow((row,n)=>{if(n>1){row.alignment={wrapText:true,vertical:'top'};row.height=60;}});
   return data;
 }
-module.exports = { buildProjectInventory, movementRows, summarize, getMovements, movementNotice, addMovementSheets };
+module.exports = { observationState, observationCounts, buildProjectInventory, movementRows, summarize, getMovements, movementNotice, addMovementSheets };

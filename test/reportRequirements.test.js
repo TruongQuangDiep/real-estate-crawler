@@ -2,7 +2,7 @@ const assert = require('assert/strict');
 const mongoose = require('mongoose');
 const ExcelJS = require('exceljs');
 const { extractExtendedFields: fields } = require('../src/services/unitFields');
-const { buildProjectInventory, movementRows, summarize } = require('../src/services/inventoryReport');
+const { buildProjectInventory, movementRows, summarize, observationCounts } = require('../src/services/inventoryReport');
 const { trackedBulkWrite, markMissing } = require('../src/services/inventoryHistory');
 const { buildExcelReport } = require('../src/services/excelService');
 const { getWeeklyPeriod } = require('../src/services/weeklyReportService');
@@ -40,6 +40,15 @@ async function main() {
   assert.equal(projects.length,3);assert.equal(projects.reduce((s,p)=>s+p.count,0),2);
   assert.equal(projects.find(p=>p.project_name==='B').count,0);
   assert.equal(buildProjectInventory([], [{source:'vhub',project_id:3,project_name:'C',listing_state:'missing'}])[0].count,0);
+  const inventoryUnits = [
+    {source:'vhub',project_id:3,project_name:'C',last_seen_at:new Date()},
+    {source:'vhub',project_id:3,project_name:'C',listing_state:'missing'},
+    {source:'vhub',project_id:3,project_name:'C'},
+  ];
+  assert.deepEqual(observationCounts(inventoryUnits),{total:3,observed:1,missing:1,untracked:1});
+  const cumulative = buildProjectInventory([], inventoryUnits, {includeMissing:true})[0];
+  assert.equal(cumulative.count,3);
+  assert.equal(cumulative.count,cumulative.observed+cumulative.missing+cumulative.untracked);
   const period=getWeeklyPeriod(new Date('2026-11-22T18:00:00Z'));
   assert.equal(period.periodEnd.toISOString(),'2026-11-22T17:00:00.000Z');
   assert.equal(period.periodStart.toISOString(),'2026-11-15T17:00:00.000Z');

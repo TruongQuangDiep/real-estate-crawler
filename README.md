@@ -420,3 +420,18 @@ Xuất báo cáo hiện tại bằng `npm run export:excel`. File được lưu 
 - Căn không còn xuất hiện chỉ được ghi nhận sau lần quét đầy đủ đúng phạm vi. Rời rổ được tách khỏi đã bán. Nếu API chỉ trả căn chưa bán thì không thể khẳng định số bán thực tế; lỗi hoặc phiên quét thiếu không phải bằng chứng căn đã bán. Báo cáo ngày lấy 24 giờ gần nhất, báo cáo tuần lấy tuần trước từ thứ Hai đến thứ Hai theo giờ Việt Nam, có chi tiết giá/trạng thái cũ và mới. Không khôi phục được biến động trước mốc bắt đầu nếu không có dữ liệu lịch sử khác.
 - Chạy `npm run documents:sync` để sao lưu các link Google Sheets/Excel trực tiếp tìm được trong dữ liệu nguồn sang thư mục `Bang_tinh_gia` dưới Drive nội bộ. File trùng ID được dùng chung. Kết quả lưu ở `PricingDocument`, gồm link bản sao hoặc lỗi truy cập. Dùng `npm run documents:sync -- --retry-failed` sau khi quyền nguồn đã được cấp lại. Tác vụ gia tăng chạy lúc 04:00 mỗi ngày khi `IMAGE_SYNC_ENABLED=true`; scheduler cần đang chạy (`npm start`). Các link thư mục nguồn vẫn do luồng đồng bộ media xử lý, có phân trang; sheet trạng thái không tuyên bố thư mục đã có đủ bảng tính nếu chưa xác minh.
 - Chạy `npm test`, `npm run test:reports` và `npm run test:integration` để kiểm tra. Kiểm thử lịch sử dùng collection tạm trong CSDL test riêng, không thay đổi dữ liệu căn thật.
+# Cách đếm căn trong Excel
+
+`npm run export:excel` xuất **toàn bộ căn đã lưu tích lũy** trong CSDL, kể cả căn
+`listing_state: missing`. Không tự loại các căn này khỏi báo cáo.
+
+- `Tong_hop_so_lieu`: tổng tích lũy ở bảng đầu; bảng B14:F18 đối chiếu căn đã thấy
+  trong lần quét phạm vi gần nhất, căn chưa thấy lại và căn chưa có mốc quan sát.
+- `Chi_tiet_quy_can`: cột AH mô tả quan sát; AN ghi lần cuối thấy trên nguồn (giờ VN).
+- `Danh_sach_tat_ca_du_an`: tổng tích lũy và ba nhóm quan sát theo từng dự án.
+
+`missing` là chưa thấy lại trong phạm vi API đã quét, không phải xác nhận đã bán.
+Các phạm vi có thời điểm quét khác nhau. Tổng tích lũy không phải tồn kho đang bán;
+giá và trạng thái của căn chưa thấy lại là dữ liệu lần ghi nhận cũ. Chỉ so sánh các
+kỳ dùng cùng cách đếm. Muốn cập nhật quan sát, chạy `npm run crawl:refresh`, kiểm tra
+log từng nguồn rồi `npm run export:excel`. Không cần đồng bộ Drive để cập nhật số căn.

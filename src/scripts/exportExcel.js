@@ -10,13 +10,14 @@ const { buildDriveIndex } = require('../services/driveLinks');
 const {reportPrices}=require('../services/reportPrices');
 
 const { extractExtendedFields, segment } = require('../services/unitFields');
-const { buildProjectInventory, addMovementSheets } = require('../services/inventoryReport');
+const { buildProjectInventory, addMovementSheets, observationState, observationCounts } = require('../services/inventoryReport');
 async function exportAll() {
   await connectDB();
   console.log('📊 Đang tổng hợp số liệu từ MongoDB Local...');
 
   const allUnits = await Unit.find({}).sort({ source: 1, project_name: 1, unit_code: 1 }).lean();
-  const units = allUnits.filter(u => u.listing_state !== 'missing');
+  // Keep cumulative inventory intact; observation flags never hide saved units.
+  const units = allUnits;
   const totalUnits = units.length;
   const count = (source, status) => units.filter(u => u.source === source && (!status || status.test(u.status || ''))).length;
   const hisaleUnits = count('hisale'), saleproUnits = count('salepro'), vhubUnits = count('vhub');
@@ -25,7 +26,7 @@ async function exportAll() {
 
   const catalog = await Project.find({}).lean();
   const lookupDrive = buildDriveIndex(catalog, await PricingDocument.find({}).lean());
-  const projectInventory = buildProjectInventory(catalog, allUnits);
+  const projectInventory = buildProjectInventory(catalog, allUnits, { includeMissing: true });
   const hisaleAllProjects = projectInventory.filter(p => p.source === 'hisale');
   const vhubAllProjects = projectInventory.filter(p => p.source === 'vhub');
   const saleproAllProjects = projectInventory.filter(p => p.source === 'salepro');
@@ -84,10 +85,10 @@ async function exportAll() {
   summarySheet.getRow(11).height = 30;
 
   // 3. BẢNG 1: THỐNG KÊ TỔNG QUAN THEO SÀN
-  summarySheet.getCell('B5').value = '1. TỔNG QUAN RỔ HÀNG TOÀN HỆ THỐNG';
+  summarySheet.getCell('B5').value = '1. TỔNG DỮ LIỆU ĐÃ THU THẬP TÍCH LŨY';
   summarySheet.getCell('B5').font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FF1E3A8A' } };
 
-  const table1Headers = ['Nguồn / Sàn', 'Số lượng dự án', 'Tổng số quỹ căn', 'Tỷ trọng (%)', 'Cao tầng (Chung cư)', 'Thấp tầng (Liền kề/BT)', 'Trạng thái: Còn hàng', 'Trạng thái: Đang lock'];
+  const table1Headers = ['Nguồn / Sàn', 'Số lượng dự án', 'Tổng căn đã lưu (tích lũy)', 'Tỷ trọng (%)', 'Cao tầng (Chung cư)', 'Thấp tầng (Liền kề/BT)', 'Trạng thái lưu: Còn hàng', 'Trạng thái lưu: Đang lock'];
   const headerRow1 = summarySheet.getRow(6);
   headerRow1.height = 45;
   table1Headers.forEach((h, idx) => {
@@ -139,28 +140,50 @@ async function exportAll() {
     });
   });
 
-  // 4. BẢNG 2: DANH SÁCH TẤT CẢ DỰ ÁN CỦA TỪNG SÀN (YÊU CẦU CỦA SẾP)
-  summarySheet.getCell('B12').value = `2. DANH SÁCH TẤT CẢ DỰ ÁN RỔ HÀNG CỦA TỪNG SÀN (TỔNG CỘNG ${totalProjects} DỰ ÁN)`;
-  summarySheet.getCell('B12').font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FF1E3A8A' } };
+  summarySheet.getCell('B12').value = '2. ĐỐI CHIẾU CĂN ĐÃ LƯU VÀ KẾT QUẢ QUAN SÁT';
+  summarySheet.getCell('B12').font = {bold:true,size:12,color:{argb:'FF1E3A8A'}};
+  const observationRows = [['Nguồn / Sàn','Tổng đã lưu','Đã thấy lần quét phạm vi gần nhất','Chưa thấy lại','Chưa có mốc quan sát']];
+  for (const [source, name] of [['hisale','HiSale'],['salepro','SalePro'],['vhub','VHub 360'],[null,'TỔNG CỘNG']]) {
+    const c = observationCounts(source ? units.filter(u => u.source === source) : units);
+    observationRows.push([name,c.total,c.observed,c.missing,c.untracked]);
+  }
+  observationRows.forEach((values, i) => {
+    const row = summarySheet.getRow(14+i); row.height = i === 0 ? 60 : 26;
+    values.forEach((v,j) => {
+      const cell = row.getCell(2+j); cell.value=v;
+      cell.alignment={vertical:'middle',horizontal:j?'center':'left',wrapText:true};
+      cell.font={size:10,bold:i===0||i===4,color:{argb:i===0?'FFFFFFFF':'FF000000'}};
+      if(i===0) cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF1E3A8A'}};
+      if(i>0 && j>0) cell.numFmt='#,##0';
+    });
+  });
+  summarySheet.mergeCells('B19:L20');
+  summarySheet.getCell('B19').value = 'Tổng tích lũy giữ toàn bộ căn trong CSDL. Đã thấy/chưa thấy lại phản ánh lần quét gần nhất của từng phạm vi, không phải kiểm kê đồng thời toàn sàn. Chưa thấy lại không đồng nghĩa đã bán. Giá và trạng thái của căn chưa thấy lại là lần ghi nhận cũ. Chỉ so sánh các kỳ có cùng cách đếm.';
+  summarySheet.getCell('B19').alignment={wrapText:true,vertical:'middle'};
+  summarySheet.getRow(19).height=24;summarySheet.getRow(20).height=24;
 
-  // Khối 1: HiSale (B13 -> D...)
-  summarySheet.mergeCells('B13:D13');
-  summarySheet.getCell('B13').value = `Tất Cả Dự Án HiSale (${hisaleAllProjects.length} Dự Án)`;
-  summarySheet.getCell('B13').font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  summarySheet.getCell('B13').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
-  summarySheet.getCell('B13').alignment = { horizontal: 'center', vertical: 'middle' };
+  // Project totals use the same cumulative population as the detail sheet.
+  summarySheet.getCell('B22').value = `3. DANH SÁCH TẤT CẢ DỰ ÁN — CĂN TÍCH LŨY (${totalProjects} DỰ ÁN)`;
+  summarySheet.getCell('B22').font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FF1E3A8A' } };
 
-  summarySheet.getCell('B14').value = 'STT';
-  summarySheet.getCell('C14').value = 'Tên Dự Án';
-  summarySheet.getCell('D14').value = 'Số Lượng Căn';
-  [summarySheet.getCell('B14'), summarySheet.getCell('C14'), summarySheet.getCell('D14')].forEach(c => {
+  // Khối 1: HiSale (B23 -> D...)
+  summarySheet.mergeCells('B23:D23');
+  summarySheet.getCell('B23').value = `Tất Cả Dự Án HiSale (${hisaleAllProjects.length} Dự Án)`;
+  summarySheet.getCell('B23').font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  summarySheet.getCell('B23').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
+  summarySheet.getCell('B23').alignment = { horizontal: 'center', vertical: 'middle' };
+
+  summarySheet.getCell('B24').value = 'STT';
+  summarySheet.getCell('C24').value = 'Tên Dự Án';
+  summarySheet.getCell('D24').value = 'Số Lượng Căn';
+  [summarySheet.getCell('B24'), summarySheet.getCell('C24'), summarySheet.getCell('D24')].forEach(c => {
     c.font = { bold: true };
     c.alignment = { horizontal: 'center' };
     c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
   });
 
   hisaleAllProjects.forEach((p, idx) => {
-    const r = 15 + idx;
+    const r = 25 + idx;
     summarySheet.getRow(r).height = 42;
     for (const col of ['C', 'G', 'K']) summarySheet.getCell(`${col}${r}`).alignment = {wrapText:true,vertical:'middle'};
     summarySheet.getCell(`B${r}`).value = idx + 1;
@@ -172,24 +195,24 @@ async function exportAll() {
     });
   });
 
-  // Khối 2: VHub 360 (F13 -> H...)
-  summarySheet.mergeCells('F13:H13');
-  summarySheet.getCell('F13').value = `Tất Cả Dự Án VHub 360 (${vhubAllProjects.length} Dự Án)`;
-  summarySheet.getCell('F13').font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  summarySheet.getCell('F13').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF059669' } };
-  summarySheet.getCell('F13').alignment = { horizontal: 'center', vertical: 'middle' };
+  // Khối 2: VHub 360 (F23 -> H...)
+  summarySheet.mergeCells('F23:H23');
+  summarySheet.getCell('F23').value = `Tất Cả Dự Án VHub 360 (${vhubAllProjects.length} Dự Án)`;
+  summarySheet.getCell('F23').font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  summarySheet.getCell('F23').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF059669' } };
+  summarySheet.getCell('F23').alignment = { horizontal: 'center', vertical: 'middle' };
 
-  summarySheet.getCell('F14').value = 'STT';
-  summarySheet.getCell('G14').value = 'Tên Dự Án';
-  summarySheet.getCell('H14').value = 'Số Lượng Căn';
-  [summarySheet.getCell('F14'), summarySheet.getCell('G14'), summarySheet.getCell('H14')].forEach(c => {
+  summarySheet.getCell('F24').value = 'STT';
+  summarySheet.getCell('G24').value = 'Tên Dự Án';
+  summarySheet.getCell('H24').value = 'Số Lượng Căn';
+  [summarySheet.getCell('F24'), summarySheet.getCell('G24'), summarySheet.getCell('H24')].forEach(c => {
     c.font = { bold: true };
     c.alignment = { horizontal: 'center' };
     c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
   });
 
   vhubAllProjects.forEach((p, idx) => {
-    const r = 15 + idx;
+    const r = 25 + idx;
     summarySheet.getRow(r).height = 42;
     for (const col of ['C', 'G', 'K']) summarySheet.getCell(`${col}${r}`).alignment = {wrapText:true,vertical:'middle'};
     summarySheet.getCell(`F${r}`).value = idx + 1;
@@ -201,24 +224,24 @@ async function exportAll() {
     });
   });
 
-  // Khối 3: SalePro (J13 -> L...)
-  summarySheet.mergeCells('J13:L13');
-  summarySheet.getCell('J13').value = `Tất Cả Dự Án SalePro (${saleproAllProjects.length} Dự Án)`;
-  summarySheet.getCell('J13').font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  summarySheet.getCell('J13').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD97706' } };
-  summarySheet.getCell('J13').alignment = { horizontal: 'center', vertical: 'middle' };
+  // Khối 3: SalePro (J23 -> L...)
+  summarySheet.mergeCells('J23:L23');
+  summarySheet.getCell('J23').value = `Tất Cả Dự Án SalePro (${saleproAllProjects.length} Dự Án)`;
+  summarySheet.getCell('J23').font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  summarySheet.getCell('J23').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD97706' } };
+  summarySheet.getCell('J23').alignment = { horizontal: 'center', vertical: 'middle' };
 
-  summarySheet.getCell('J14').value = 'STT';
-  summarySheet.getCell('K14').value = 'Tên Dự Án';
-  summarySheet.getCell('L14').value = 'Số Lượng Căn';
-  [summarySheet.getCell('J14'), summarySheet.getCell('K14'), summarySheet.getCell('L14')].forEach(c => {
+  summarySheet.getCell('J24').value = 'STT';
+  summarySheet.getCell('K24').value = 'Tên Dự Án';
+  summarySheet.getCell('L24').value = 'Số Lượng Căn';
+  [summarySheet.getCell('J24'), summarySheet.getCell('K24'), summarySheet.getCell('L24')].forEach(c => {
     c.font = { bold: true };
     c.alignment = { horizontal: 'center' };
     c.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
   });
 
   saleproAllProjects.forEach((p, idx) => {
-    const r = 15 + idx;
+    const r = 25 + idx;
     summarySheet.getRow(r).height = 42;
     for (const col of ['C', 'G', 'K']) summarySheet.getCell(`${col}${r}`).alignment = {wrapText:true,vertical:'middle'};
     summarySheet.getCell(`J${r}`).value = idx + 1;
@@ -279,6 +302,7 @@ async function exportAll() {
     { header: 'Tình trạng link/file Drive', key: 'drive_status', width: 52 },
     { header: 'Lỗi đồng bộ Drive', key: 'drive_error', width: 65 },
     { header: 'Ghi chú chất lượng giá', key: 'price_quality', width: 65 },
+    { header: 'Lần cuối thấy trên nguồn (giờ VN)', key: 'last_seen_at', width: 28 },
   ];
 
   units.forEach((unit, index) => {
@@ -323,7 +347,8 @@ async function exportAll() {
       drive_file: drive.files.length ? {text:'Mở file nội bộ',hyperlink:drive.files[0]} : '',
       drive_status: drive.status,
       drive_error: drive.error,
-      listing_state: unit.listing_state === 'missing' ? 'Không còn trong rổ đã quét' : 'Có trong CSDL',
+      listing_state: observationState(unit) === 'missing' ? 'Chưa thấy lại trong phạm vi đã quét' : observationState(unit) === 'observed' ? 'Đã thấy trong lần quét phạm vi gần nhất' : 'Chưa có mốc quan sát',
+      last_seen_at: unit.last_seen_at ? new Date(new Date(unit.last_seen_at).getTime() + 7 * 3600000) : null,
       created_at: unit.created_at ? new Date(new Date(unit.created_at).getTime() + 7 * 3600000) : null,
     });
     row.height=30;
@@ -363,6 +388,9 @@ async function exportAll() {
   detailSheet.getColumn('area_land').numFmt = '#,##0.00';
   detailSheet.getColumn('area_build').numFmt = '#,##0.00';
   detailSheet.getColumn('created_at').numFmt = 'dd/mm/yyyy hh:mm:ss';
+  detailSheet.getColumn('last_seen_at').numFmt = 'dd/mm/yyyy hh:mm:ss';
+  detailSheet.getColumn('listing_state').width = 44;
+  detailSheet.getColumn('listing_state').alignment = {wrapText:true,vertical:'middle'};
 
   detailSheet.getColumn('index').alignment = { horizontal: 'center', vertical: 'middle' };
   detailSheet.getColumn('source').alignment = { horizontal: 'center', vertical: 'middle' };
@@ -379,7 +407,7 @@ async function exportAll() {
   });
 
   detailSheet.views = [{ state: 'frozen', ySplit: 1 }];
-  detailSheet.autoFilter = { from: 'A1', to: `AM${detailSheet.rowCount}` };
+  detailSheet.autoFilter = { from: 'A1', to: `AN${detailSheet.rowCount}` };
 
   // ==================================================================
   // SHEET 3: TOÀN BỘ DỰ ÁN HỢP NHẤT (CÓ THỂ LỌC VÀ SORT TIỆN LỢI)
@@ -393,17 +421,20 @@ async function exportAll() {
     { header: 'STT', key: 'index', width: 8 },
     { header: 'Nguồn / Sàn', key: 'source', width: 18 },
     { header: 'Tên Dự Án', key: 'project_name', width: 42 },
-    { header: 'Số Lượng Căn', key: 'count', width: 18 },
+    { header: 'Tổng căn tích lũy', key: 'count', width: 20 },
     { header: 'Tỷ Trọng Trong Sàn (%)', key: 'pct_source', width: 24 },
     { header: 'Tỷ Trọng Toàn Hệ Thống (%)', key: 'pct_total', width: 26 },
     { header: 'ID dự án', key: 'project_id', width: 24 },
     { header: 'Tình trạng dữ liệu', key: 'data_status', width: 65 },
+    { header: 'Đã thấy trong lần quét phạm vi gần nhất', key: 'observed', width: 28 },
+    { header: 'Chưa thấy lại', key: 'missing', width: 20 },
+    { header: 'Chưa có mốc quan sát', key: 'untracked', width: 24 },
   ];
 
   const allProjectsConsolidated = [
-    ...hisaleAllProjects.map(p => ({ source: 'HISALE', name: p.project_name, project_id: p.project_id, data_status: p.data_status, count: p.count, pct_source: p.count / (hisaleUnits || 1), pct_total: p.count / (totalUnits || 1) })),
-    ...saleproAllProjects.map(p => ({ source: 'SALEPRO', name: p.project_name, project_id: p.project_id, data_status: p.data_status, count: p.count, pct_source: p.count / (saleproUnits || 1), pct_total: p.count / (totalUnits || 1) })),
-    ...vhubAllProjects.map(p => ({ source: 'VHUB', name: p.project_name, project_id: p.project_id, data_status: p.data_status, count: p.count, pct_source: p.count / (vhubUnits || 1), pct_total: p.count / (totalUnits || 1) })),
+    ...hisaleAllProjects.map(p => ({ ...p, source: 'HISALE', name: p.project_name, pct_source: p.count / (hisaleUnits || 1), pct_total: p.count / (totalUnits || 1) })),
+    ...saleproAllProjects.map(p => ({ ...p, source: 'SALEPRO', name: p.project_name, pct_source: p.count / (saleproUnits || 1), pct_total: p.count / (totalUnits || 1) })),
+    ...vhubAllProjects.map(p => ({ ...p, source: 'VHUB', name: p.project_name, pct_source: p.count / (vhubUnits || 1), pct_total: p.count / (totalUnits || 1) })),
   ];
 
   allProjectsConsolidated.forEach((p, idx) => {
@@ -412,6 +443,7 @@ async function exportAll() {
       source: p.source,
       project_name: p.name,
       count: p.count,
+      observed: p.observed, missing: p.missing, untracked: p.untracked,
       pct_source: p.pct_source,
       pct_total: p.pct_total,
       project_id: String(p.project_id ?? ''),
@@ -430,11 +462,12 @@ async function exportAll() {
   projectSheet.getColumn('source').alignment = { horizontal: 'center', vertical: 'middle' };
   projectSheet.getColumn('count').alignment = { horizontal: 'right', vertical: 'middle' };
   projectSheet.getColumn('count').numFmt = '#,##0';
+  for(const key of ['observed','missing','untracked']) projectSheet.getColumn(key).numFmt = '#,##0';
   projectSheet.getColumn('pct_source').alignment = { horizontal: 'center', vertical: 'middle' };
   projectSheet.getColumn('pct_total').alignment = { horizontal: 'center', vertical: 'middle' };
 
   projectSheet.views = [{ state: 'frozen', ySplit: 1 }];
-  projectSheet.autoFilter = { from: 'A1', to: `H${projectSheet.rowCount}` };
+  projectSheet.autoFilter = { from: 'A1', to: `K${projectSheet.rowCount}` };
 
   // ==================================================================
   // LƯU FILE
@@ -447,6 +480,8 @@ async function exportAll() {
   const logs=await require('../models/CrawlLog').find({}).sort({started_at:-1}).limit(40).lean();
   const seenSources=new Set();
   const notes=workbook.getWorksheet('Huong_dan_du_lieu');
+  const basis = notes.addRow(['Cách đếm căn trong báo cáo', 'Bảng chính và danh sách dự án tính toàn bộ căn tích lũy trong CSDL, gồm cả căn chưa thấy lại. Xem bảng đối chiếu tại Tong_hop_so_lieu!B14:F18. Cột AH mô tả quan sát và AN là lần cuối thấy trên nguồn. Không coi tổng tích lũy là tồn kho đang bán.']);
+  basis.alignment={wrapText:true,vertical:'top'};basis.height=60;
   for(const log of logs) {
     if(seenSources.has(log.source))continue;seenSources.add(log.source);
     const time=log.finished_at?new Date(log.finished_at).toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'}):'chưa kết thúc';
